@@ -122,13 +122,16 @@ istruzioni di un frame.
 
 ## CPU
 
-- **82 opcode**: i 54 esistenti (LDA/STA/LDX/STX/LDY/STY, TAX/TXA/TAY/
+- **83 opcode**: i 55 esistenti (LDA/STA/LDX/STX/LDY/STY, TAX/TXA/TAY/
   TYA/TXY/TYX, ADD/SUB/AND/OR/XOR/CMP in immediata+indirizzo, ASL/LSR,
   INC/DEC/INX/INY/DEX/DEY, JMP/JZ/JNZ/JLT/JGE/JCS/JCC/JSR/RTS,
   PHA/PLA/PHX/PLX/PHY/PLY, IN, CLAMPX/CLAMPY) **più 28 nuovi opcode
   indicizzati**: varianti `,X` e `,Y` per le 14 istruzioni che oggi
   leggono/scrivono un indirizzo assoluto fisso (LDA/STA/LDX/STX/LDY/
-  STY, ADD/SUB/AND/OR/XOR/CMP, INC/DEC).
+  STY, ADD/SUB/AND/OR/XOR/CMP, INC/DEC). (Il vecchio commento nel
+  progetto Python parlava di "54 istruzioni" ma la tabella di dispatch
+  vera ne contava 55 - contate qui per davvero, non copiate dal
+  commento.)
 - Motivazione dell'indicizzazione: senza di essa, accedere a un array
   (slot OAM, righe di tilemap, tabelle di stato) richiede costruire
   l'indirizzo a mano ogni volta — esattamente il tipo di lavoro che un
@@ -138,9 +141,9 @@ istruzioni di un frame.
   motivo di esistere qui).
 - Per confronto: il 65816 vero dello SNES ha ~92 istruzioni × ~24
   modalità di indirizzamento = tutti i 256 valori di un byte opcode
-  occupati. 82 resta volutamente più snello — niente indiretto,
+  occupati. 83 resta volutamente più snello — niente indiretto,
   niente stack-relative, un solo formato a 24-bit per gli indirizzi.
-  Restano 174/256 opcode liberi per estensioni future SE emerge un
+  Restano 173/256 opcode liberi per estensioni future SE emerge un
   bisogno concreto scrivendo giochi veri (mai aggiungere per
   simmetria astratta, come dice giustamente `memory_map.py` del
   vecchio progetto sullo spazio libero non assegnato).
@@ -230,7 +233,7 @@ istruzioni di un frame.
 
 ```
 /                    <- solo elementi della console (motore)
-  cpu.lua            <- CPU (82 opcode)
+  cpu.lua            <- CPU (83 opcode)
   ppu.lua            <- PPU (compositing tile/sprite)
   apu.lua            <- sintesi audio procedurale
   memory_map.lua     <- mappa indirizzi, unica fonte di verità
