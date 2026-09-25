@@ -57,6 +57,51 @@ function M.set_directory_entry(mem, tile_index, offset, size_class)
     mem[addr + 1] = bit.band(bit.rshift(offset, 8), 0xff)
     mem[addr + 2] = bit.band(bit.rshift(offset, 16), 0xff)
     mem[addr + 3] = size_class
+    M._track_tile_usage(mem, tile_index, size_class)
+end
+
+-- -----------------------------------------------------------
+-- tracking dell'uso dell'archivio grafico, per il pannello di stato
+-- (lcd_status.lua "VRAM"): quanti byte sono davvero occupati da tile
+-- REALMENTE definiti, non l'intera dimensione fissa del pool. Non e'
+-- derivabile leggendo la sola directory a posteriori (un entry mai
+-- toccato e uno che punta davvero a offset 0/size 8x8 sono byte
+-- identici) - va contato quando si definisce un tile, qui.
+--
+-- LIMITE NOTO: uno swap di banco grafico (PORT_GFX_BANK_SELECT) fa un
+-- ffi.copy grezzo, senza passare da qui - il conteggio dopo uno swap
+-- resta quello di prima dello swap. Non e' un problema oggi (nessun
+-- punto del motore fa ancora swap di banchi grafici veri, solo
+-- set_directory_entry diretto) - da rivedere quando esistera' un
+-- primo caso d'uso reale di banchi swappabili.
+-- -----------------------------------------------------------
+local usage_registry = {}  -- [mem] = { seen = {[tile_index]=size_bytes}, total = N }
+
+function M._track_tile_usage(mem, tile_index, size_class)
+    local reg = usage_registry[mem]
+    if not reg then
+        reg = { seen = {}, total = 0 }
+        usage_registry[mem] = reg
+    end
+    local size = TILE_SIZES[size_class + 1]
+    local bytes = size * size
+    local prev = reg.seen[tile_index]
+    if prev then
+        reg.total = reg.total - prev + bytes
+    else
+        reg.total = reg.total + bytes
+    end
+    reg.seen[tile_index] = bytes
+end
+
+-- percentuale di VRAM totale occupata: tilemap+directory sono sempre
+-- "allocate" per struttura (dimensione fissa), la parte variabile e'
+-- solo l'archivio grafico (vedi tracking sopra)
+function M.get_vram_usage_pct(mem)
+    local reg = usage_registry[mem]
+    local gfx_used = reg and reg.total or 0
+    local used = mm.TILEMAP_BYTES + mm.DIRECTORY_BYTES + gfx_used
+    return math.min(100, used / mm.VRAM_SIZE * 100)
 end
 
 -- offset+taglia (byte) di un tile - una sola lettura di directory,

@@ -3,8 +3,10 @@ lcd_status.lua - pannello di stato sull'LCD SPI (separato dall'HDMI:
 ora che il motore usa HDMI+KMSDRM per il gioco, l'LCD e' libero per
 diagnostica - vedi docs/design.md). Ridisegna il disegno "shinchan"
 (pre-convertito una volta con tests/shinchan_to_bin.py) con sopra una
-fascia di statistiche live: tempo CPU, tempo PPU (compositing), tempo
-GPU/blit (present su HDMI), banco grafica/stage correnti, FPS.
+fascia di statistiche live, ognuna con testo + barra a segmenti
+colorata (verde/arancio/rosso secondo soglia) invece di un numero
+nudo: tempo CPU/istruzione, tempo PPU (compositing), tempo GPU/blit
+(present su HDMI), quanto e' pieno l'archivio grafico (VRAM), FPS.
 
 Scrive direttamente sul framebuffer del pannello (oggi /dev/fb0 -
 verificato con `cat /proc/fb` sul Pi: fb_ili9486, 480x320, RGB565) con
@@ -20,6 +22,15 @@ gia' verificato sull'hardware reale (vedi commento originale
 giallo = giallo"). Non "correggere" quest'ordine sulla base di quello
 che ci si aspetterebbe in teoria - e' gia' stato validato a occhio sul
 pannello vero.
+
+Soglie colore (decise insieme all'utente dopo il primo giro di
+benchmark reale su Pi 1 - vedi docs/scheda_tecnica.md):
+  CPU (us/istruzione):  verde <15,  altrimenti rosso
+  PPU (ms compositing):  verde <15,  altrimenti rosso
+  GPU (ms present/blit): verde <15,  altrimenti rosso
+  VRAM (% archivio grafico occupato): nessuna soglia (non e' un
+    problema avere VRAM piena, e' solo informativo) - colore neutro
+  FPS: rosso <30, arancio <60, verde >=60 (barra piena = 60fps)
 ]]
 local ffi = require("ffi")
 local bit = require("bit")
@@ -34,6 +45,17 @@ M.LcdStatus = LcdStatus
 local SCALE = 2  -- ingrandimento del testo (5x7 -> 10x14 px per carattere)
 local CHAR_ADVANCE = (font.GLYPH_W + 1) * SCALE  -- +1 = spazio fra caratteri
 local LINE_HEIGHT = (font.GLYPH_H + 2) * SCALE
+
+local BAR_X = 150         -- inizio barra (dopo testo etichetta+valore)
+local BAR_SEGMENTS = 12
+local SEGMENT_W, SEGMENT_H, SEGMENT_GAP = 18, 12, 2
+
+local COLOR_GREEN = { 60, 200, 90 }
+local COLOR_ORANGE = { 230, 150, 40 }
+local COLOR_RED = { 210, 60, 50 }
+local COLOR_NEUTRAL = { 90, 170, 220 }
+local COLOR_EMPTY = { 40, 40, 50 }   -- segmento non riempito
+local COLOR_TEXT = { 235, 235, 235 } -- etichetta/valore, sempre bianco (il colore "parla" nella barra)
 
 -- -----------------------------------------------------------
 -- pacchettizzazione RGB565 (vedi nota in testa al file sull'ordine byte)
@@ -77,6 +99,23 @@ local function draw_text(buf, width, height, x0, y0, text, r, g, b)
     end
 end
 
+-- barra a segmenti: filled (0..BAR_SEGMENTS) segmenti nel colore dato,
+-- il resto in COLOR_EMPTY - stessa idea dei mock-up "▮▮▯▯▯▯▯▯▯▯▯▯"
+local function draw_bar(buf, width, height, x0, y0, filled, color)
+    filled = math.max(0, math.min(BAR_SEGMENTS, filled))
+    for i = 0, BAR_SEGMENTS - 1 do
+        local c = i < filled and color or COLOR_EMPTY
+        fill_rect(buf, width, height, x0 + i * (SEGMENT_W + SEGMENT_GAP), y0, SEGMENT_W, SEGMENT_H, c[1], c[2], c[3])
+    end
+end
+
+-- una riga completa: "LABEL valoreUNIT" a sinistra + barra colorata a destra
+local function draw_stat_row(buf, width, height, y, text, fraction, color)
+    draw_text(buf, width, height, SCALE * 2, y, text, COLOR_TEXT[1], COLOR_TEXT[2], COLOR_TEXT[3])
+    local filled = math.floor(fraction * BAR_SEGMENTS + 0.5)
+    draw_bar(buf, width, height, BAR_X, y + 2, filled, color)
+end
+
 -- -----------------------------------------------------------
 -- LcdStatus:new(fb_path, bg_bin_path, width, height)
 --
@@ -106,43 +145,59 @@ function M.new(fb_path, bg_bin_path, width, height)
 end
 
 -- update(stats): stats = {
---   cpu_us_per_instr, ppu_ms, present_ms, gfx_bank, stage, fps
+--   cpu_us_per_instr, ppu_ms, present_ms, vram_pct, gfx_bank, stage, fps
 -- } - tutti opzionali, una riga viene disegnata solo se il relativo
 -- campo e' presente
 function LcdStatus:update(stats)
     ffi.copy(self.frame, self.bg, self.frame_bytes)
 
-    local bar_h = LINE_HEIGHT * 5 + SCALE * 4
+    local n_rows = 5
+    local bar_h = LINE_HEIGHT * n_rows + SCALE * 4
     local bar_y = self.height - bar_h
     fill_rect(self.frame, self.width, self.height, 0, bar_y, self.width, bar_h, 10, 10, 14)
 
     local y = bar_y + SCALE * 2
-    local x = SCALE * 2
-    local WHITE = { 235, 235, 235 }
+    local w, h = self.width, self.height
 
+    -- CPU: scala 0-30us, soglia 15us (verde sotto, rosso sopra)
     if stats.cpu_us_per_instr then
-        draw_text(self.frame, self.width, self.height, x, y,
-            string.format("CPU %.1fUS", stats.cpu_us_per_instr), WHITE[1], WHITE[2], WHITE[3])
+        local v = stats.cpu_us_per_instr
+        local color = v < 15 and COLOR_GREEN or COLOR_RED
+        draw_stat_row(self.frame, w, h, y, string.format("CPU %.1fUS", v), v / 30, color)
         y = y + LINE_HEIGHT
     end
+
+    -- PPU: scala 0-40ms, soglia 15ms
     if stats.ppu_ms then
-        draw_text(self.frame, self.width, self.height, x, y,
-            string.format("PPU %.2fMS", stats.ppu_ms), WHITE[1], WHITE[2], WHITE[3])
+        local v = stats.ppu_ms
+        local color = v < 15 and COLOR_GREEN or COLOR_RED
+        draw_stat_row(self.frame, w, h, y, string.format("PPU %.2fMS", v), v / 40, color)
         y = y + LINE_HEIGHT
     end
+
+    -- GPU (present/blit su HDMI): scala 0-40ms, soglia 15ms
     if stats.present_ms then
-        draw_text(self.frame, self.width, self.height, x, y,
-            string.format("GPU %.2fMS", stats.present_ms), WHITE[1], WHITE[2], WHITE[3])
+        local v = stats.present_ms
+        local color = v < 15 and COLOR_GREEN or COLOR_RED
+        draw_stat_row(self.frame, w, h, y, string.format("GPU %.2fMS", v), v / 40, color)
         y = y + LINE_HEIGHT
     end
+
+    -- VRAM: testo = banco/stage correnti, barra = quanto e' pieno
+    -- l'archivio grafico (0-100%, nessuna soglia: non e' un problema
+    -- di per se' avere VRAM piena)
     if stats.gfx_bank ~= nil and stats.stage ~= nil then
-        draw_text(self.frame, self.width, self.height, x, y,
-            string.format("VRAM B%d S%d", stats.gfx_bank, stats.stage), WHITE[1], WHITE[2], WHITE[3])
+        local pct = stats.vram_pct or 0
+        draw_stat_row(self.frame, w, h, y,
+            string.format("VRAM B%d S%d", stats.gfx_bank, stats.stage), pct / 100, COLOR_NEUTRAL)
         y = y + LINE_HEIGHT
     end
+
+    -- FPS: scala 0-60 (barra piena = 60fps), rosso<30, arancio<60, verde>=60
     if stats.fps then
-        draw_text(self.frame, self.width, self.height, x, y,
-            string.format("FPS %d", stats.fps), WHITE[1], WHITE[2], WHITE[3])
+        local v = stats.fps
+        local color = v < 30 and COLOR_RED or (v < 60 and COLOR_ORANGE or COLOR_GREEN)
+        draw_stat_row(self.frame, w, h, y, string.format("FPS %d", v), v / 60, color)
     end
 
     local f = io.open(self.fb_path, "wb")
@@ -160,7 +215,10 @@ if arg and arg[0] and arg[0]:match("lcd_status%.lua$") then
     local fb_path = arg[1] or "/dev/fb0"
     local bg_path = arg[2] or "shinchan_565.bin"
     local panel = M.new(fb_path, bg_path, 480, 320)
-    panel:update({ cpu_us_per_instr = 3.7, ppu_ms = 0.63, present_ms = 1.10, gfx_bank = 0, stage = 0, fps = 58 })
+    panel:update({
+        cpu_us_per_instr = 20.4, ppu_ms = 35.92, present_ms = 21.24,
+        vram_pct = 14, gfx_bank = 0, stage = 0, fps = 16,
+    })
     print("Scritto un frame di prova su " .. fb_path)
 end
 

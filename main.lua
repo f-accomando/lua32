@@ -273,6 +273,7 @@ local function main()
                 cpu_us_per_instr = lcd_instr > 0 and (lcd_cpu_s / lcd_instr * 1e6) or nil,
                 ppu_ms = lcd_ppu_s / lcd_frames * 1000,
                 present_ms = lcd_present_s / lcd_frames * 1000,
+                vram_pct = ppu.get_vram_usage_pct(cpu.mem),
                 gfx_bank = cpu.current_gfx_bank,
                 stage = cpu.current_stage,
                 fps = math.floor(lcd_frames / lcd_timer + 0.5),
