@@ -342,11 +342,17 @@ local function main()
 
         lcd_frames = lcd_frames + 1
         lcd_timer = lcd_timer + frame_time
+        -- il primissimo giro del loop ha un t-last_time quasi zero
+        -- (last_time e' stato appena impostato subito prima di entrare
+        -- nel while) - un fps finto e altissimo che sporca sia il
+        -- picco che la media, va scartato dal campione statistico
+        if session_frames > 0 then
+            session_frame_times[#session_frame_times + 1] = raw_elapsed
+        end
         session_frames = session_frames + 1
-        session_frame_times[#session_frame_times + 1] = raw_elapsed
         if lcd_panel and lcd_timer >= LCD_UPDATE_INTERVAL then
             lcd_panel:update({
-                cpu_us_per_instr = lcd_instr > 0 and (lcd_cpu_s / lcd_instr * 1e6) or nil,
+                cpu_ms = lcd_cpu_s / lcd_frames * 1000,
                 ppu_ms = lcd_ppu_s / lcd_frames * 1000,
                 present_ms = lcd_present_s / lcd_frames * 1000,
                 vram_pct = ppu.get_vram_usage_pct(cpu.mem),

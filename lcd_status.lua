@@ -25,7 +25,7 @@ pannello vero.
 
 Soglie colore (decise insieme all'utente dopo il primo giro di
 benchmark reale su Pi 1 - vedi docs/scheda_tecnica.md):
-  CPU (us/istruzione):  verde <15,  altrimenti rosso
+  CPU (ms totali/frame): verde <15,  altrimenti rosso
   PPU (ms compositing):  verde <15,  altrimenti rosso
   GPU (ms present/blit): verde <15,  altrimenti rosso
   VRAM (% archivio grafico occupato): nessuna soglia (non e' un
@@ -145,7 +145,7 @@ function M.new(fb_path, bg_bin_path, width, height)
 end
 
 -- update(stats): stats = {
---   cpu_us_per_instr, ppu_ms, present_ms, vram_pct, gfx_bank, stage, fps
+--   cpu_ms, ppu_ms, present_ms, vram_pct, gfx_bank, stage, fps
 -- } - tutti opzionali, una riga viene disegnata solo se il relativo
 -- campo e' presente
 function LcdStatus:update(stats)
@@ -159,11 +159,16 @@ function LcdStatus:update(stats)
     local y = bar_y + SCALE * 2
     local w, h = self.width, self.height
 
-    -- CPU: scala 0-30us, soglia 15us (verde sotto, rosso sopra)
-    if stats.cpu_us_per_instr then
-        local v = stats.cpu_us_per_instr
+    -- CPU: ms TOTALI per frame (non us/istruzione - altrimenti non e'
+    -- confrontabile con PPU/GPU, che sono gia' costo per frame intero;
+    -- su scale diverse la CPU sembrerebbe un collo di bottiglia quando
+    -- in realta' e' trascurabile, es. 24us x ~85 istruzioni/frame =
+    -- ~2ms, contro i 20-30ms di PPU/GPU). Stessa scala/soglia di
+    -- PPU/GPU per un confronto diretto a colpo d'occhio.
+    if stats.cpu_ms then
+        local v = stats.cpu_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
-        draw_stat_row(self.frame, w, h, y, string.format("CPU %.1fUS", v), v / 30, color)
+        draw_stat_row(self.frame, w, h, y, string.format("CPU %.2fMS", v), v / 40, color)
         y = y + LINE_HEIGHT
     end
 
@@ -216,7 +221,7 @@ if arg and arg[0] and arg[0]:match("lcd_status%.lua$") then
     local bg_path = arg[2] or "shinchan_565.bin"
     local panel = M.new(fb_path, bg_path, 480, 320)
     panel:update({
-        cpu_us_per_instr = 20.4, ppu_ms = 35.92, present_ms = 21.24,
+        cpu_ms = 2.1, ppu_ms = 35.92, present_ms = 21.24,
         vram_pct = 14, gfx_bank = 0, stage = 0, fps = 16,
     })
     print("Scritto un frame di prova su " .. fb_path)
