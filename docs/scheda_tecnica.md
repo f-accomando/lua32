@@ -152,3 +152,4 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 - **ConsoleLang** — da decidere se portare o ripensare
 - **Salvataggio persistente** (save state) — non progettato
 - ~~Verifica completa su Raspberry Pi 1 reale~~ — **fatto** per CPU/PPU/video/input/cartuccia/LCD; PPU ottimizzata (~2x); ~38-40fps medi, minimo ~15fps
+- **Output RCA/composito** — dimostrato possibile sul Pi reale (funziona, FPS anche migliori dell'HDMI) ma sospeso a metà: serve rendere permanente il forzamento del connettore, sistemare l'audio jack (bug preesistente in `config.txt`) e correggere lo stretch verticale. Dettagli in `docs/raspberry_pi_setup.md` § 6.2

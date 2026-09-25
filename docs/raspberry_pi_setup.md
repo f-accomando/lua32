@@ -152,6 +152,68 @@ stato verificato su hardware reale da questa sessione di sviluppo,
 verificalo ad occhio prima di riavviare) - vedi i commenti in testa a
 `tests/switch_output.sh` per i dettagli.
 
+## 6.2 RCA/composito - stato sperimentale (IN PAUSA, non finito)
+
+Verificato sul Pi reale: **funziona** (`main.lua` gira su schermo
+collegato via RCA, FPS anche migliori dell'HDMI - 37.5 medio contro
+31-32), ma con tre problemi aperti, nessuno risolto. Non è ancora un
+output di seconda classe utilizzabile, solo dimostrato possibile -
+ripreso da qui quando servirà, per ora si torna alla roadmap (OS).
+
+**1. Il connettore composito non è mai "connected" di default.** Il
+connettore DRM `Composite-1` (VEC, id 53 in `modetest`) non ha
+rilevamento hotplug come l'HDMI - il suo stato resta sempre `unknown`
+in `/sys/class/drm/*/status`, mai `connected`, e SDL2 (backend KMSDRM)
+sceglie solo fra i connettori `connected`: senza forzarlo, `SDL_Init`
+fallisce con "kmsdrm not available" anche con l'overlay giusto attivo
+(`dtoverlay=vc4-kms-v3d,composite=1` - il parametro è confermato reale,
+visto nel README overlay di questo Pi) e anche se `modetest` dimostra
+che il connettore funziona benissimo a livello DRM (4 mode validi,
+pattern visibile fisicamente sulla TV con `modetest -M vc4 -s
+53:720x480i`). Workaround che FUNZIONA ma non è permanente:
+
+```sh
+echo on | sudo tee /sys/kernel/debug/dri/0/Composite-1/force
+```
+
+Va rilanciato ad OGNI riavvio (`/sys/kernel/debug` non è persistente
+per natura, torna a `unspecified` al riavvio). **TODO non fatto**: un
+servizio systemd oneshot che lo riapplica all'avvio (o integrarlo in
+`tests/switch_output.sh --analog`), verificando anche il nome esatto
+della cartella (`Composite-1`) perché non è garantito che l'indice del
+connettore (`53`) o il nome restino identici su un Pi diverso.
+
+**2. Audio jack disabilitato in `config.txt` - bug preesistente, non
+introdotto in questa sessione.** `config.txt` contiene DUE righe in
+conflitto:
+
+```
+dtparam=audio=on
+dtparam=audio=off
+```
+
+Vince l'ultima (`dtparam=audio=off`): il jack 3.5mm risulta
+completamente disabilitato a livello hardware. `aplay -l` non mostra
+nessuna scheda per l'audio analogico (solo `vc4hdmi` e il controller
+USB collegato). Per questo `raspi-config nonint do_audio 1` (chiamato
+da `switch_output.sh --analog`) fallisce silenziosamente - prova a
+instradare verso una scheda che non esiste - e `audio_out.lua` riceve
+poi un errore ALSA anomalo (524, non uno storico errno) quando prova
+ad aprire il device. **TODO non fatto**: rimuovere/commentare la riga
+`dtparam=audio=off` da `config.txt` (chi l'ha messa e perché non è
+chiaro - non è stata aggiunta in questa sessione, era già lì prima di
+qualunque nostra modifica), poi riverificare con `aplay -l` che compaia
+una scheda per il jack.
+
+**3. Immagine stretchata in verticale sul composito.** 720×480 (NTSC)
+usa pixel NON quadrati, a differenza dell'HDMI. Il renderer attuale
+(`video.lua`) fa uno stretch pieno del frame senza tenerne conto
+(scelta "niente letterbox" documentata in `scheda_tecnica.md`, che
+funzionava bene finché l'unico output era HDMI a pixel quadrati). Sul
+composito servirebbe un pillarbox di circa l'11% in larghezza (mappare
+l'aspect ratio 4:3 corretto dentro i 720px raw invece di riempirli
+tutti). **TODO non fatto**: nessuna correzione implementata.
+
 ## 7. Dopo la verifica
 
 - [ ] Aggiornare `docs/scheda_tecnica.md`: sostituire "verifica in corso"
