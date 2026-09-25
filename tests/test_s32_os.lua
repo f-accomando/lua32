@@ -225,6 +225,29 @@ do
     check("dopo lo switch: nessuna cartuccia in pausa finche' non arriva ESC", a5.action, "launch")
 end
 
+-- ---------------------------------------------------------------
+-- Session:on_closed - usato da main.lua quando una cartuccia va in
+-- crash (vedi il pcall attorno al tick loop): deve "dimenticare" la
+-- pausa anche se la cartuccia era stata ripresa da pausa e POI e'
+-- andata in crash (altrimenti il picker continuerebbe a offrire
+-- "resume" su una cartuccia che non esiste piu', vedi la conversazione)
+-- ---------------------------------------------------------------
+do
+    local entries = { { name = "demo", kind = "play" } }
+    local s = os_mod.new_session()
+
+    s:confirm(entries)              -- lancio diretto (nessuna pausa)
+    s:on_paused(entries[1])         -- ESC: demo va in pausa
+    s:confirm(entries)              -- riseleziona demo: action=resume, ma paused NON viene sgomberato da confirm()
+    check("dopo resume: risulta ancora 'in pausa' (main.lua non l'ha ancora chiuso)", s.paused ~= nil, true)
+
+    s:on_closed()                   -- demo e' andata in crash mentre girava di nuovo
+    check("dopo on_closed: nessuna cartuccia risulta piu' in pausa", s.paused, nil)
+
+    local a = s:confirm(entries)
+    check("dopo on_closed: riselezionarla la rilancia da capo, non 'resume' a vuoto", a.action, "launch")
+end
+
 print()
 if fails == 0 then
     print("Tutti i test passati.")

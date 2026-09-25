@@ -506,7 +506,20 @@ local function main()
         else
             -- === tick loop della cartuccia in esecuzione - stessa
             -- logica di prima, solo su game.* invece che su variabili
-            -- locali di main() (vedi new_game) ===
+            -- locali di main() (vedi new_game) - tutta avvolta in
+            -- pcall: se la cartuccia va in crash (opcode sconosciuto,
+            -- stack overflow, loop infinito - vedi gli error() in
+            -- cpu.lua, o qualunque altro errore Lua durante
+            -- l'esecuzione) si torna al picker invece di far chiudere
+            -- tutto s32. Un bug in UNA cartuccia non deve bloccare
+            -- l'accesso al resto - stessa logica per cui l'OS non e'
+            -- lui stesso una cartuccia (vedi la domanda dell'utente in
+            -- chat). La funzione e' definita qui, non fuori da main(),
+            -- apposta: cosi' cattura come upvalue le variabili locali
+            -- di main() che la pausa/LCD gia' usavano (v, lcd_panel,
+            -- cpu_load_state, throttled_info/timer, running) senza
+            -- doverle far viaggiare a mano attraverso i parametri.
+            local ok, crash_err = pcall(function()
             game.accumulator = game.accumulator + frame_time
 
             local ticks = 0
@@ -642,6 +655,18 @@ local function main()
                     throttled = throttled_info,
                 })
                 game.lcd_timer, game.lcd_instr, game.lcd_cpu_s, game.lcd_ppu_s, game.lcd_present_s, game.lcd_apu_s, game.lcd_frames = 0, 0, 0, 0, 0, 0, 0
+            end
+            end)  -- fine pcall del tick della cartuccia
+
+            if not ok then
+                print("s32: '" .. game.entry.name .. "' e' andata in crash, torno al menu: " .. tostring(crash_err))
+                local ok_close = pcall(close_game, game)
+                if not ok_close then
+                    print("s32: (anche la chiusura pulita di '" .. game.entry.name .. "' e' fallita, proseguo comunque)")
+                end
+                game = nil
+                session:on_closed()  -- se era stata ripresa da pausa, non e' piu' "in pausa": non c'e' piu' nulla da riprendere
+                mode = "picker"
             end
         end
 
