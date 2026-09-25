@@ -136,50 +136,117 @@ end
 
 -- -----------------------------------------------------------
 -- sfondo: griglia densa a 8x8, un solo passaggio con "coperto"
+--
+-- OTTIMIZZAZIONE (dopo il primo benchmark reale su Pi 1, ~20-36ms per
+-- un fondo 320x224 - vedi docs/scheda_tecnica.md): due cambi, non uno
+-- solo, perche' le cause erano distinte:
+--
+-- 1. Prima si allocava un buffer di output NUOVO (ffi.new, ~215KB per
+--    320x224) e una griglia "coperto" fatta di tabelle Lua annidate
+--    NUOVE ad ogni singola chiamata - decine di volte al secondo. Su
+--    un Pi 1 con poca banda di memoria e un solo core, la pressione
+--    sul GC/allocatore per liberare e ricreare tutto questo ad ogni
+--    frame e' reale. Ora entrambi sono riusati fra una chiamata e
+--    l'altra (cache a livello di modulo, riallocata solo se cambiano
+--    le dimensioni) e semplicemente azzerati con ffi.fill (un memset,
+--    ordini di grandezza piu' veloce di ricreare tabelle/cdata).
+--    CONTRATTO: il buffer ritornato e' valido solo fino alla chiamata
+--    successiva a render_background/render_frame - va consumato
+--    subito (esattamente come gia' fa v:present() e ogni test
+--    esistente, che leggono i pixel subito dopo la chiamata).
+-- 2. Il ciclo per-pixel chiamava sample_tile_pixel()/decode_color()
+--    (due funzioni) per OGNI pixel, e decode_color ricalcolava
+--    l'indirizzo CGRAM da zero ogni volta (moltiplicazione per
+--    palette*COLORS_PER_PALETTE inclusa) anche se la palette di un
+--    tile e' la stessa per tutti i suoi pixel. Ora l'indirizzo base
+--    della palette e dell'archivio grafico si calcola UNA VOLTA per
+--    tile (non per pixel) e il ciclo interno legge direttamente da
+--    mem[] senza chiamate di funzione.
 -- -----------------------------------------------------------
 local CELL_PX = 8
 local MAX_SPAN_CELLS = 8  -- 64px / 8px: quanto puo' estendersi
                            -- all'indietro l'origine di un tile grande
 
+local TILEMAP_W, TILEMAP_H = mm.TILEMAP_W, mm.TILEMAP_H
+local TILEMAP_ENTRY_BYTES = mm.TILEMAP_ENTRY_BYTES
+local TILE_DESC_INDEX_BITS = mm.TILE_DESC_INDEX_BITS
+local VRAM_TILEMAP_BASE = mm.VRAM_BASE + mm.TILEMAP_VRAM_OFFSET
+local VRAM_DIRECTORY_BASE = mm.VRAM_BASE + mm.DIRECTORY_VRAM_OFFSET
+local GRAPHICS_POOL_BASE = mm.VRAM_BASE + mm.GRAPHICS_POOL_VRAM_OFFSET
+local DIRECTORY_ENTRY_BYTES = mm.DIRECTORY_ENTRY_BYTES
+local CGRAM_BASE = mm.CGRAM_BASE
+local COLORS_PER_PALETTE = mm.COLORS_PER_PALETTE
+local CGRAM_COLOR_BYTES = mm.CGRAM_COLOR_BYTES
+
+local frame_buf_cache = { size = 0, buf = nil }
+local function get_frame_buf(screen_w, screen_h)
+    local needed = screen_w * screen_h * 3
+    if frame_buf_cache.size ~= needed then
+        frame_buf_cache.buf = ffi.new("uint8_t[?]", needed)
+        frame_buf_cache.size = needed
+    end
+    ffi.fill(frame_buf_cache.buf, needed, 0)
+    return frame_buf_cache.buf
+end
+
+local covered_cache = { cols = 0, rows = 0, grid = nil }
+local function get_covered_grid(cols, rows)
+    local total = cols * rows
+    if covered_cache.cols ~= cols or covered_cache.rows ~= rows then
+        covered_cache.grid = ffi.new("uint8_t[?]", total)
+        covered_cache.cols, covered_cache.rows = cols, rows
+    else
+        ffi.fill(covered_cache.grid, total, 0)
+    end
+    return covered_cache.grid
+end
+
 function M.render_background(mem, scroll_x, scroll_y, screen_w, screen_h)
-    local buf = ffi.new("uint8_t[?]", screen_w * screen_h * 3)
+    local buf = get_frame_buf(screen_w, screen_h)
 
     local first_cell_x = math.floor(scroll_x / CELL_PX) - MAX_SPAN_CELLS
     local first_cell_y = math.floor(scroll_y / CELL_PX) - MAX_SPAN_CELLS
     local last_cell_x = math.floor((scroll_x + screen_w - 1) / CELL_PX)
     local last_cell_y = math.floor((scroll_y + screen_h - 1) / CELL_PX)
 
-    local covered = {}  -- covered[cy][cx] = true se gia' disegnata da un tile piu' grande
-    local function is_covered(cx, cy)
-        local row = covered[cy]
-        return row ~= nil and row[cx]
-    end
-    local function mark_covered(cx, cy)
-        local row = covered[cy]
-        if not row then row = {}; covered[cy] = row end
-        row[cx] = true
-    end
+    local cols = last_cell_x - first_cell_x + 1
+    local rows = last_cell_y - first_cell_y + 1
+    local covered = get_covered_grid(cols, rows)
 
     for cy = first_cell_y, last_cell_y do
+        local crow = (cy - first_cell_y) * cols
         for cx = first_cell_x, last_cell_x do
-            if not is_covered(cx, cy) then
-                local tm_x = cx % mm.TILEMAP_W
-                local tm_y = cy % mm.TILEMAP_H
-                if tm_x < 0 then tm_x = tm_x + mm.TILEMAP_W end
-                if tm_y < 0 then tm_y = tm_y + mm.TILEMAP_H end
-                local entry_addr = mm.VRAM_BASE + mm.TILEMAP_VRAM_OFFSET
-                    + (tm_y * mm.TILEMAP_W + tm_x) * mm.TILEMAP_ENTRY_BYTES
-                local tile_index, palette = M.decode_tile_descriptor(read16(mem, entry_addr))
+            local cidx = crow + (cx - first_cell_x)
+            if covered[cidx] == 0 then
+                local tm_x = cx % TILEMAP_W
+                local tm_y = cy % TILEMAP_H
+                if tm_x < 0 then tm_x = tm_x + TILEMAP_W end
+                if tm_y < 0 then tm_y = tm_y + TILEMAP_H end
+                local entry_addr = VRAM_TILEMAP_BASE + (tm_y * TILEMAP_W + tm_x) * TILEMAP_ENTRY_BYTES
+                local word = bit.bor(mem[entry_addr], bit.lshift(mem[entry_addr + 1], 8))
+                local tile_index = bit.band(word, INDEX_MASK)
 
                 if tile_index ~= 0 then
-                    local offset, size = M.get_tile_info(mem, tile_index)
+                    local palette = bit.band(bit.rshift(word, TILE_DESC_INDEX_BITS), 0x07)
+                    local dir_addr = VRAM_DIRECTORY_BASE + tile_index * DIRECTORY_ENTRY_BYTES
+                    local offset = bit.bor(mem[dir_addr], bit.lshift(mem[dir_addr + 1], 8),
+                        bit.lshift(mem[dir_addr + 2], 16))
+                    local size = TILE_SIZES[mem[dir_addr + 3] + 1]
                     local span = size / CELL_PX
 
-                    for dy = 0, span - 1 do
-                        for dx = 0, span - 1 do
-                            mark_covered(cx + dx, cy + dy)
+                    local dy_max = math.min(span - 1, last_cell_y - cy)
+                    local dx_max = math.min(span - 1, last_cell_x - cx)
+                    for dy = 0, dy_max do
+                        local mrow = crow + dy * cols
+                        for dx = 0, dx_max do
+                            covered[mrow + (cx - first_cell_x) + dx] = 1
                         end
                     end
+
+                    -- indirizzi base per QUESTO tile (calcolati una
+                    -- volta, non per ogni pixel - vedi nota in testa)
+                    local tile_pixel_base = GRAPHICS_POOL_BASE + offset
+                    local palette_base = CGRAM_BASE + palette * COLORS_PER_PALETTE * CGRAM_COLOR_BYTES
 
                     local tile_world_x = cx * CELL_PX
                     local tile_world_y = cy * CELL_PX
@@ -187,16 +254,17 @@ function M.render_background(mem, scroll_x, scroll_y, screen_w, screen_h)
                         local oy = tile_world_y + ly - scroll_y
                         if oy >= 0 and oy < screen_h then
                             local row_base = oy * screen_w
+                            local tile_row_base = tile_pixel_base + ly * size
                             for lx = 0, size - 1 do
                                 local ox = tile_world_x + lx - scroll_x
                                 if ox >= 0 and ox < screen_w then
-                                    local pal_index = M.sample_tile_pixel(mem, offset, size, lx, ly)
+                                    local pal_index = mem[tile_row_base + lx]
                                     if pal_index ~= 0 then
-                                        local r, g, b = M.decode_color(mem, palette, pal_index)
+                                        local caddr = palette_base + pal_index * CGRAM_COLOR_BYTES
                                         local pix = (row_base + ox) * 3
-                                        buf[pix] = r
-                                        buf[pix + 1] = g
-                                        buf[pix + 2] = b
+                                        buf[pix] = mem[caddr]
+                                        buf[pix + 1] = mem[caddr + 1]
+                                        buf[pix + 2] = mem[caddr + 2]
                                     end
                                 end
                             end
@@ -221,29 +289,37 @@ function M.render_sprites(mem, buf, screen_w, screen_h)
         if bit.band(attr, mm.OAM_ATTR_VISIBLE) ~= 0 then
             local x = read16(mem, base + 0)
             local y = read16(mem, base + 2)
-            local tile_index, palette = M.decode_tile_descriptor(read16(mem, base + 4))
+            local word = read16(mem, base + 4)
+            local tile_index = bit.band(word, INDEX_MASK)
+            local palette = bit.band(bit.rshift(word, TILE_DESC_INDEX_BITS), 0x07)
             if x > 32767 then x = x - 65536 end  -- 16 bit con segno, uno
             if y > 32767 then y = y - 65536 end  -- sprite puo' uscire dal bordo
             local flip_x = bit.band(attr, mm.OAM_ATTR_FLIP_X) ~= 0
             local flip_y = bit.band(attr, mm.OAM_ATTR_FLIP_Y) ~= 0
             local offset, size = M.get_tile_info(mem, tile_index)
 
+            -- indirizzi base per QUESTO sprite (una volta, non per
+            -- pixel - stessa idea di render_background)
+            local tile_pixel_base = GRAPHICS_POOL_BASE + offset
+            local palette_base = CGRAM_BASE + palette * COLORS_PER_PALETTE * CGRAM_COLOR_BYTES
+
             for ly = 0, size - 1 do
                 local oy = y + ly
                 if oy >= 0 and oy < screen_h then
                     local sy = flip_y and (size - 1 - ly) or ly
                     local row_base = oy * screen_w
+                    local tile_row_base = tile_pixel_base + sy * size
                     for lx = 0, size - 1 do
                         local ox = x + lx
                         if ox >= 0 and ox < screen_w then
                             local sx = flip_x and (size - 1 - lx) or lx
-                            local pal_index = M.sample_tile_pixel(mem, offset, size, sx, sy)
+                            local pal_index = mem[tile_row_base + sx]
                             if pal_index ~= 0 then
-                                local r, g, b = M.decode_color(mem, palette, pal_index)
+                                local caddr = palette_base + pal_index * CGRAM_COLOR_BYTES
                                 local pix = (row_base + ox) * 3
-                                buf[pix] = r
-                                buf[pix + 1] = g
-                                buf[pix + 2] = b
+                                buf[pix] = mem[caddr]
+                                buf[pix + 1] = mem[caddr + 1]
+                                buf[pix + 2] = mem[caddr + 2]
                             end
                         end
                     end
