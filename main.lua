@@ -1,19 +1,25 @@
 --[[
-main.lua - primo giro end-to-end del motore: CPU + PPU + video + input
-vere, in un loop a 60fps. Non e' ancora l'OS (nessuna selezione
-cartuccia, nessuna sospensione) - e' la prova che tutti i pezzi
-costruiti finora (cpu.lua, assembler.lua, ppu.lua, video.lua,
-input.lua) lavorano insieme per davvero, prima di costruire l'OS sopra.
+main.lua - punto di ingresso: CPU + PPU + video + input + audio + OS
+(s32_os.lua/s32_os_ui.lua), in un loop a 60fps.
 
-Il "gioco" e' assemblato al volo qui dentro (non c'e' ancora un
-formato cartuccia/loader) - un quadrato che si muove con le frecce/
-WASD e rimbalza sui bordi dello schermo, scrivendo la sua posizione
-direttamente in OAM (esattamente come farebbe una cartuccia vera).
+All'avvio mostra il cart-picker (griglia delle cartucce in cart/, piu'
+dev/ se la dev-mode e' attiva - combo Ctrl+D/L1+R1, vedi
+input.lua:dev_toggle_held()) invece di lanciare subito un gioco. Invio
+avvia la cartuccia sotto cursore; ESC durante il gioco lo mette in
+pausa (congelato in RAM, non chiuso) e torna al picker - riselezionare
+la STESSA cartuccia riprende da dove si era, sceglierne un'altra chiede
+conferma prima di scartare quella in pausa. Vedi s32_os.lua (Session)
+per la macchina a stati completa.
+
+Il demo giocabile (build_demo_program/setup_demo_assets, esportati piu'
+sotto) e' impacchettato come vera cartuccia in cart/demo.cart da
+tests/pack_demo_cart.lua - non e' piu' caricato a mano qui dentro,
+passa dalla stessa pipeline cart.lua che userebbe una cartuccia vera.
 
 Uso (sul target reale, Raspberry Pi con KMSDRM):
     SDL_VIDEODRIVER=kmsdrm luajit main.lua
 
-ESC per uscire.
+ESC nel picker senza nulla in pausa: esce.
 ]]
 local ffi = require("ffi")
 local bit = require("bit")
@@ -24,6 +30,10 @@ local ppu = require("ppu")
 local video = require("video")
 local input = require("input")
 local apu_module = require("apu")
+local cart = require("cart")
+local s32_os = require("s32_os")
+local os_ui = require("s32_os_ui")
+local os_config = require("os_config")
 
 local SCREEN_W, SCREEN_H = 320, 224  -- modalita' 4:3, vedi docs/design.md
 local CART_LOAD_ADDR = 0x1000
@@ -108,12 +118,24 @@ end
 -- -----------------------------------------------------------
 local function build_demo_program(oam_base)
     local POS_X, POS_Y, INIT_FLAG, INPUT_TMP = 0x3000, 0x3002, 0x3020, 0x3022
+    -- descrittore tile + attributo dello sprite: scritti qui (una sola
+    -- volta, dentro il blocco di init gia' protetto da INIT_FLAG) invece
+    -- che pre-popolati da setup_demo_assets() lato Lua - cosi' il
+    -- programma e' autosufficiente e funziona anche impacchettato come
+    -- vera cartuccia .cart (dove non c'e' nessun setup host-side prima
+    -- del boot, solo VRAM/CGRAM dal banco e il codice) - vedi
+    -- tests/pack_demo_cart.lua.
+    local sprite_word = ppu.encode_tile_descriptor(2, 0)
     local src = string.format([[
         LDA %d
         JNZ already_init
         LDA #150
         STA %d
         LDA #100
+        STA %d
+        LDA #%d
+        STA %d
+        LDA #%d
         STA %d
         LDA #1
         STA %d
@@ -184,7 +206,7 @@ local function build_demo_program(oam_base)
         HALT
     ]],
         INIT_FLAG,
-        POS_X, POS_Y, INIT_FLAG,
+        POS_X, POS_Y, sprite_word, oam_base + 4, mm.OAM_ATTR_VISIBLE, oam_base + 6, INIT_FLAG,
         INPUT_TMP,
         INPUT_TMP, POS_Y, POS_Y, POS_Y,
         INPUT_TMP, POS_Y, POS_Y,
@@ -287,13 +309,26 @@ APU:  %.2f ms/frame medio (sintesi + accodamento audio)
         apu_s / frames * 1000))
 end
 
-local function main()
-    local cpu = cpu_module.new()
-    local oam_base = setup_demo_assets(cpu)
-    local rom = build_demo_program(oam_base)
-    for i, b in ipairs(rom) do cpu.mem[CART_LOAD_ADDR + i - 1] = b end
+-- new_game(entry): carica una cartuccia vera (cart.lua) dentro una CPU
+-- nuova e le da' il proprio APU/uscita audio/accumulatori - tutto lo
+-- stato che prima viveva come variabili locali di main() ora vive per
+-- cartuccia, cosi' pausa/ripresa/switch (vedi s32_os.lua Session)
+-- possono tenere piu' di una cartuccia "viva" (una in esecuzione, una
+-- in pausa) senza mescolarne le statistiche. Ritorna nil+errore se il
+-- file non c'e' o non si carica (es. una voce dev/ non ancora
+-- impacchettata) - il chiamante resta nel picker invece di far
+-- schiantare tutto per una cartuccia mancante.
+local function new_game(entry)
+    if not entry.cart_path then
+        return nil, "nessun .cart pre-impacchettato in dev/" .. entry.name .. "/ (serve l'editor, non ancora costruito)"
+    end
+    local ok, loaded_or_err = pcall(cart.load, entry.cart_path)
+    if not ok then
+        return nil, tostring(loaded_or_err)
+    end
 
-    local v = video.new("s32 - demo", SCREEN_W, SCREEN_H, false)
+    local cpu = cpu_module.new()
+    local load_addr = cart.install(cpu, loaded_or_err, CART_LOAD_ADDR)
 
     -- audio: l'APU gira sempre (e' solo matematica, nessuna dipendenza
     -- hardware), l'uscita SDL2 invece puo' non essere disponibile
@@ -307,13 +342,54 @@ local function main()
     if not audio_ok then
         print("s32: uscita audio non disponibile (" .. tostring(audio_out_or_err) .. ") - si continua senza suono")
     end
-    local audio_sample_accum = 0  -- accumulatore frazionario: 22050/60 non e' intero,
-                                    -- senza questo l'audio andrebbe lentamente fuori sync
 
-    local prev_action = false  -- per rilevare il fronte di salita/discesa del
-                                 -- tasto azione (X/Cross/spazio) - un GATE va
-                                 -- acceso/spento una volta sola, non ad ogni tick
-                                 -- in cui il tasto resta premuto
+    return {
+        entry = entry,
+        cpu = cpu,
+        load_addr = load_addr,
+        apu = apu,
+        audio_out = audio_out,
+        audio_sample_accum = 0,  -- accumulatore frazionario: 22050/60 non e' intero,
+                                   -- senza questo l'audio andrebbe lentamente fuori sync
+        prev_action = false,     -- fronte di salita/discesa del tasto azione, vedi sotto
+        accumulator = 0,         -- accumulatore del tick loop a passo fisso
+
+        -- lcd_timer parte gia' al valore soglia: il primissimo
+        -- aggiornamento (che disegna anche l'immagine di sfondo per la
+        -- prima volta, vedi lcd_status.lua self.first_write) scatta al
+        -- primo frame utile invece di aspettare LCD_UPDATE_INTERVAL
+        -- secondi a vuoto.
+        lcd_timer = LCD_UPDATE_INTERVAL, lcd_instr = 0, lcd_cpu_s = 0, lcd_ppu_s = 0, lcd_present_s = 0, lcd_apu_s = 0, lcd_frames = 0,
+
+        -- accumulatori per l'intera sessione DI QUESTA CARTUCCIA (non
+        -- si azzerano fra un aggiornamento LCD e l'altro, ma ripartono
+        -- da zero se la cartuccia viene chiusa e riaperta) - per il
+        -- riepilogo finale, vedi print_session_summary/close_game
+        session_frame_times = {},
+        session_cpu_s = 0, session_ppu_s = 0, session_present_s = 0, session_apu_s = 0, session_instr = 0, session_frames = 0,
+        session_elapsed_s = 0,
+    }, nil
+end
+
+-- close_game(game): stampa il riepilogo di sessione di QUESTA
+-- cartuccia (chiamata quando viene chiusa per davvero - switch
+-- confermato, o uscita dal programma - non alla semplice pausa, quella
+-- la tiene "game" com'e' finche' non si riprenderà o si conferma lo switch)
+local function close_game(game)
+    if not game then return end
+    print_session_summary(game.session_frame_times, game.session_cpu_s, game.session_ppu_s,
+        game.session_present_s, game.session_apu_s, game.session_instr, game.session_frames)
+    if game.audio_out then game.audio_out:close() end
+end
+
+local function main()
+    local v = video.new("s32", SCREEN_W, SCREEN_H, false)
+
+    local os_cfg = os_config.load()
+    local session = s32_os.new_session()
+    local nav_tracker = s32_os.new_edge_tracker()
+    local dev_tracker = s32_os.new_dev_toggle_tracker()
+    local os_buf = ffi.new("uint8_t[?]", SCREEN_W * SCREEN_H * 3)
 
     local lcd_panel, sysinfo = nil, nil
     local cpu_load_state, throttled_info, throttled_timer = nil, nil, 0
@@ -331,23 +407,27 @@ local function main()
             os.getenv("S32_LCD_BG") or "shinchan_565.bin",
             480, 320)
     end
-    -- lcd_timer parte gia' al valore soglia: il primissimo aggiornamento
-    -- (che disegna anche l'immagine di sfondo per la prima volta, vedi
-    -- lcd_status.lua self.first_write) scatta al primo frame utile
-    -- invece di aspettare LCD_UPDATE_INTERVAL secondi a vuoto - senza
-    -- questo il pannello resta "spento" per i primi 2s dopo l'avvio,
-    -- facile da scambiare per un bug quando in realta' e' solo un'attesa.
-    local lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_apu_s, lcd_frames = LCD_UPDATE_INTERVAL, 0, 0, 0, 0, 0, 0
 
-    -- accumulatori per l'intera sessione (non si azzerano mai, a
-    -- differenza di quelli sopra che alimentano l'LCD ogni 0.5s) - per
-    -- il riepilogo finale su stdout, vedi print_session_summary
-    local session_frame_times = {}
-    local session_cpu_s, session_ppu_s, session_present_s, session_apu_s, session_instr, session_frames = 0, 0, 0, 0, 0, 0
-    local session_elapsed_s = 0
+    -- game: la cartuccia in esecuzione O in pausa (nil = nessuna, si e'
+    -- sempre nel picker in quel caso). mode: cosa mostra/guida il loop
+    -- in questo momento - non necessariamente lo stesso di session:mode()
+    -- (quella distingue solo picker/confirm_switch, entrambi disegnati
+    -- da "picker" qui: il dialogo di conferma si sovrappone al picker,
+    -- non e' un terzo mode a se'.
+    local game = nil
+    local mode = "picker"  -- "picker" | "running"
+
+    local function launch(entry)
+        local g, err = new_game(entry)
+        if not g then
+            print("s32: impossibile avviare '" .. entry.name .. "': " .. err)
+            return
+        end
+        game = g
+        mode = "running"
+    end
 
     local running = true
-    local accumulator = 0
     local last_time = now()
 
     while running do
@@ -355,147 +435,221 @@ local function main()
         local raw_elapsed = t - last_time  -- non clampato: per le statistiche serve il dato vero, non quello limitato per l'accumulatore
         local frame_time = math.min(raw_elapsed, TICK_DT * MAX_CATCHUP_TICKS)
         last_time = t
-        accumulator = accumulator + frame_time
 
-        local ticks = 0
-        local t_cpu = now()
-        while accumulator >= TICK_DT and ticks < MAX_CATCHUP_TICKS do
-            -- poll() (svuota la coda eventi, aggiorna lo stato tastiera
-            -- che input_byte() legge) va fatto ad ogni tick, non una
-            -- sola volta per frame renderizzato: se il rendering e'
-            -- lento (present() e' il costo maggiore su hardware debole,
-            -- vedi tests/bench.lua) il framerate reale puo' scendere
-            -- ben sotto i 60Hz del tick, e con lui la frequenza con cui
-            -- si guarda la tastiera - una pressione breve rischia di
-            -- sparire fra un frame e l'altro. Qui dentro gira sempre a
-            -- 60Hz nominali, indipendentemente da quanto sia lento il
-            -- resto del frame.
-            if input.poll() then running = false end
-            if input.menu_button_pressed() then running = false end
-            local input_byte = input.input_byte()
-            local steps = cpu:run(CART_LOAD_ADDR, input_byte)
-            lcd_instr = lcd_instr + steps
-            session_instr = session_instr + steps
+        if input.poll() then running = false end
 
-            -- suono: fronte di salita/discesa del bit azione
-            -- (X/Cross/spazio) sul canale SFX dedicato - GATE acceso
-            -- quando si preme, spento (parte il rilascio ADSR) quando
-            -- si rilascia. Registri APU = memoria normale, una STA
-            -- diretta basterebbe da un programma cartuccia vero -
-            -- qui scriviamo a mano perche' il demo non ha ancora
-            -- istruzioni dedicate al suono.
-            --
-            -- Un "blup" morbido invece del bip acuto di prima: onda
-            -- triangolare (niente armoniche dure come il quadro),
-            -- frequenza piu' bassa, e soprattutto un sustain BASSO -
-            -- cosi' anche tenendo premuto il bottone il suono fa un
-            -- "pop" iniziale e sfuma quasi subito invece di ronzare
-            -- a volume pieno per tutta la pressione.
-            local action = bit.band(input_byte, 0x10) ~= 0
-            if action ~= prev_action then
-                local reg = mm.APU_BASE + SFX_CHANNEL * mm.APU_CHANNEL_BYTES
-                if action then
-                    cpu.mem[reg + mm.APU_REG_FREQ_LO] = 330 % 256
-                    cpu.mem[reg + mm.APU_REG_FREQ_HI] = math.floor(330 / 256)
-                    cpu.mem[reg + mm.APU_REG_WAVEFORM] = mm.APU_WAVEFORM_TRIANGLE
-                    cpu.mem[reg + mm.APU_REG_VOLUME] = 170
-                    cpu.mem[reg + mm.APU_REG_ATTACK] = 1
-                    cpu.mem[reg + mm.APU_REG_DECAY] = 35
-                    cpu.mem[reg + mm.APU_REG_SUSTAIN] = 40
-                    cpu.mem[reg + mm.APU_REG_RELEASE] = 40
+        -- combo dev-mode: attiva/disattiva in qualunque momento (nel
+        -- picker o durante il gioco), permanente (salvata su disco) -
+        -- vedi input.lua:dev_toggle_held() e s32_os.lua
+        if dev_tracker:update(input.dev_toggle_held()) then
+            s32_os.toggle_dev_mode(os_cfg, os_config.DEFAULT_PATH, os_config)
+        end
+
+        if mode == "picker" then
+            local entries = s32_os.list_entries(os_cfg.dev_mode)
+            local cols = os_ui.grid_cols(SCREEN_W)
+            local ib = input.input_byte()
+            local held = {
+                up = bit.band(ib, 0x01) ~= 0,
+                down = bit.band(ib, 0x02) ~= 0,
+                left = bit.band(ib, 0x04) ~= 0,
+                right = bit.band(ib, 0x08) ~= 0,
+                confirm = bit.band(ib, 0x10) ~= 0,
+                back = input.menu_button_pressed(),
+            }
+            local edges = nav_tracker:update(held)
+
+            if session:mode() == "confirm_switch" then
+                if edges.confirm then
+                    local new_entry = session:confirm_switch_yes()
+                    close_game(game)
+                    game = nil
+                    launch(new_entry)
+                elseif edges.back then
+                    session:confirm_switch_no()  -- resta nel picker, la cartuccia in pausa non cambia
                 end
-                cpu.mem[reg + mm.APU_REG_CONTROL] = action and mm.APU_CONTROL_GATE or 0
-                prev_action = action
+            else
+                if edges.up then session:move(0, -1, entries, cols) end
+                if edges.down then session:move(0, 1, entries, cols) end
+                if edges.left then session:move(-1, 0, entries, cols) end
+                if edges.right then session:move(1, 0, entries, cols) end
+                if edges.confirm then
+                    local action = session:confirm(entries)
+                    if action.action == "resume" then
+                        mode = "running"
+                    elseif action.action == "launch" then
+                        launch(action.entry)
+                    end
+                    -- "ask_confirm": niente da fare qui, il prossimo
+                    -- render mostra il dialogo (session:mode() e' gia'
+                    -- passato a "confirm_switch")
+                elseif edges.back then
+                    if game then
+                        mode = "running"  -- ESC senza dialogo aperto: riprende la cartuccia in pausa (stesso tasto pausa/ripresa)
+                    else
+                        running = false  -- niente in pausa, niente da confermare: non c'e' altro "indietro"
+                    end
+                end
             end
 
-            accumulator = accumulator - TICK_DT
-            ticks = ticks + 1
-        end
-        local dt_cpu = now() - t_cpu
-        lcd_cpu_s = lcd_cpu_s + dt_cpu
-        session_cpu_s = session_cpu_s + dt_cpu
-
-        -- genera e accoda l'audio di questo blocco di tick - fatto una
-        -- volta per frame renderizzato (non per tick) per limitare il
-        -- numero di chiamate a SDL_QueueAudio, ma la QUANTITA' di
-        -- campioni generati segue il tempo REALE trascorso (frame_time),
-        -- non il framerate di rendering - cosi' l'audio resta a tempo
-        -- anche se il video rallenta. Accumulatore frazionario perche'
-        -- 22050Hz/60fps non e' un numero intero di campioni a tick.
-        -- Cronometrato PER CONTO SUO (non dentro dt_cpu sopra: prima ci
-        -- finiva per sbaglio, facendo sembrare la CPU molto piu' lenta
-        -- di quanto sia davvero - mai misurato il costo vero
-        -- dell'audio su Pi finora, solo assunto "trascurabile" dalla
-        -- sandbox, esattamente l'errore gia' fatto una volta con la PPU).
-        local t_apu = now()
-        if audio_out then
-            audio_sample_accum = audio_sample_accum + frame_time * APU_SAMPLE_RATE
-            local n = math.floor(audio_sample_accum)
-            if n > 0 then
-                audio_sample_accum = audio_sample_accum - n
-                local sbuf = apu:generate(cpu.mem, n)
-                audio_out:queue(sbuf, n)
+            os_ui.render_picker(os_buf, SCREEN_W, SCREEN_H, entries, session.cursor, os_cfg.dev_mode, session.paused)
+            if session:mode() == "confirm_switch" then
+                os_ui.render_confirm_dialog(os_buf, SCREEN_W, SCREEN_H, session.paused.name, session.pending.name)
             end
-        end
-        local dt_apu = now() - t_apu
-        lcd_apu_s = lcd_apu_s + dt_apu
-        session_apu_s = session_apu_s + dt_apu
+            v:present(os_buf)
+        elseif input.menu_button_pressed() then
+            -- ESC/Start durante il gioco: pausa (congelato in RAM, non
+            -- chiuso) e torna al picker - vedi s32_os.lua Session per
+            -- cosa succede riselezionandolo o scegliendone un altro.
+            session:on_paused(game.entry)
+            mode = "picker"
+        else
+            -- === tick loop della cartuccia in esecuzione - stessa
+            -- logica di prima, solo su game.* invece che su variabili
+            -- locali di main() (vedi new_game) ===
+            game.accumulator = game.accumulator + frame_time
 
-        local t_ppu = now()
-        local buf = ppu.render_frame(cpu.mem, 0, 0, SCREEN_W, SCREEN_H)
-        local dt_ppu = now() - t_ppu
-        lcd_ppu_s = lcd_ppu_s + dt_ppu
-        session_ppu_s = session_ppu_s + dt_ppu
+            local ticks = 0
+            local t_cpu = now()
+            while game.accumulator >= TICK_DT and ticks < MAX_CATCHUP_TICKS do
+                -- poll() va fatto ad ogni tick, non una sola volta per
+                -- frame renderizzato: se il rendering e' lento (present()
+                -- e' il costo maggiore su hardware debole, vedi
+                -- tests/bench.lua) il framerate reale puo' scendere ben
+                -- sotto i 60Hz del tick, e con lui la frequenza con cui
+                -- si guarda la tastiera - una pressione breve rischia di
+                -- sparire fra un frame e l'altro. Qui dentro gira sempre
+                -- a 60Hz nominali, indipendentemente da quanto sia lento
+                -- il resto del frame. Il tasto menu invece si controlla
+                -- una volta sola per frame renderizzato (sopra, prima di
+                -- entrare qui) - la pausa e' un'azione discreta, non ha
+                -- bisogno della stessa precisione del movimento.
+                if input.poll() then running = false end
+                local input_byte = input.input_byte()
+                local steps = game.cpu:run(game.load_addr, input_byte)
+                game.lcd_instr = game.lcd_instr + steps
+                game.session_instr = game.session_instr + steps
 
-        local t_present = now()
-        v:present(buf)
-        local dt_present = now() - t_present
-        lcd_present_s = lcd_present_s + dt_present
-        session_present_s = session_present_s + dt_present
+                -- suono: fronte di salita/discesa del bit azione
+                -- (X/Cross/spazio) sul canale SFX dedicato - GATE acceso
+                -- quando si preme, spento (parte il rilascio ADSR) quando
+                -- si rilascia. Registri APU = memoria normale, una STA
+                -- diretta basterebbe da un programma cartuccia vero -
+                -- qui scriviamo a mano perche' il demo non ha ancora
+                -- istruzioni dedicate al suono.
+                --
+                -- Un "blup" morbido invece del bip acuto di prima: onda
+                -- triangolare (niente armoniche dure come il quadro),
+                -- frequenza piu' bassa, e soprattutto un sustain BASSO -
+                -- cosi' anche tenendo premuto il bottone il suono fa un
+                -- "pop" iniziale e sfuma quasi subito invece di ronzare
+                -- a volume pieno per tutta la pressione.
+                local action = bit.band(input_byte, 0x10) ~= 0
+                if action ~= game.prev_action then
+                    local reg = mm.APU_BASE + SFX_CHANNEL * mm.APU_CHANNEL_BYTES
+                    if action then
+                        game.cpu.mem[reg + mm.APU_REG_FREQ_LO] = 330 % 256
+                        game.cpu.mem[reg + mm.APU_REG_FREQ_HI] = math.floor(330 / 256)
+                        game.cpu.mem[reg + mm.APU_REG_WAVEFORM] = mm.APU_WAVEFORM_TRIANGLE
+                        game.cpu.mem[reg + mm.APU_REG_VOLUME] = 170
+                        game.cpu.mem[reg + mm.APU_REG_ATTACK] = 1
+                        game.cpu.mem[reg + mm.APU_REG_DECAY] = 35
+                        game.cpu.mem[reg + mm.APU_REG_SUSTAIN] = 40
+                        game.cpu.mem[reg + mm.APU_REG_RELEASE] = 40
+                    end
+                    game.cpu.mem[reg + mm.APU_REG_CONTROL] = action and mm.APU_CONTROL_GATE or 0
+                    game.prev_action = action
+                end
 
-        lcd_frames = lcd_frames + 1
-        lcd_timer = lcd_timer + frame_time
-        session_elapsed_s = session_elapsed_s + raw_elapsed
-        -- scarta il periodo di avvio (transitori) e qualunque campione
-        -- oltre MAX_SANE_FPS (quasi certamente un artefatto di misura,
-        -- es. il primissimo giro del loop con t-last_time quasi zero)
-        if session_elapsed_s >= WARMUP_S and raw_elapsed >= 1 / MAX_SANE_FPS then
-            session_frame_times[#session_frame_times + 1] = raw_elapsed
-        end
-        session_frames = session_frames + 1
-        if lcd_panel and lcd_timer >= LCD_UPDATE_INTERVAL then
-            local cpu_load_pct
-            cpu_load_pct, cpu_load_state = sysinfo.read_cpu_usage_pct(cpu_load_state)
-
-            throttled_timer = throttled_timer + lcd_timer
-            if throttled_timer >= THROTTLED_CHECK_INTERVAL or throttled_info == nil then
-                throttled_info = sysinfo.read_throttled()
-                throttled_timer = 0
+                game.accumulator = game.accumulator - TICK_DT
+                ticks = ticks + 1
             end
+            local dt_cpu = now() - t_cpu
+            game.lcd_cpu_s = game.lcd_cpu_s + dt_cpu
+            game.session_cpu_s = game.session_cpu_s + dt_cpu
 
-            lcd_panel:update({
-                cpu_ms = lcd_cpu_s / lcd_frames * 1000,
-                ppu_ms = lcd_ppu_s / lcd_frames * 1000,
-                present_ms = lcd_present_s / lcd_frames * 1000,
-                apu_ms = lcd_apu_s / lcd_frames * 1000,
-                vram_pct = ppu.get_vram_usage_pct(cpu.mem),
-                gfx_bank = cpu.current_gfx_bank,
-                stage = cpu.current_stage,
-                fps = math.floor(lcd_frames / lcd_timer + 0.5),
-                cpu_load_pct = cpu_load_pct,
-                temp_c = sysinfo.read_temp_c(),
-                throttled = throttled_info,
-            })
-            lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_apu_s, lcd_frames = 0, 0, 0, 0, 0, 0, 0
+            -- genera e accoda l'audio di questo blocco di tick - fatto
+            -- una volta per frame renderizzato (non per tick) per
+            -- limitare il numero di chiamate a SDL_QueueAudio, ma la
+            -- QUANTITA' di campioni generati segue il tempo REALE
+            -- trascorso (frame_time), non il framerate di rendering -
+            -- cosi' l'audio resta a tempo anche se il video rallenta.
+            -- Accumulatore frazionario perche' 22050Hz/60fps non e' un
+            -- numero intero di campioni a tick. Cronometrato PER CONTO
+            -- SUO (non dentro dt_cpu sopra: prima ci finiva per sbaglio,
+            -- facendo sembrare la CPU molto piu' lenta di quanto sia
+            -- davvero - mai misurato il costo vero dell'audio su Pi
+            -- finora, solo assunto "trascurabile" dalla sandbox,
+            -- esattamente l'errore gia' fatto una volta con la PPU).
+            local t_apu = now()
+            if game.audio_out then
+                game.audio_sample_accum = game.audio_sample_accum + frame_time * APU_SAMPLE_RATE
+                local n = math.floor(game.audio_sample_accum)
+                if n > 0 then
+                    game.audio_sample_accum = game.audio_sample_accum - n
+                    local sbuf = game.apu:generate(game.cpu.mem, n)
+                    game.audio_out:queue(sbuf, n)
+                end
+            end
+            local dt_apu = now() - t_apu
+            game.lcd_apu_s = game.lcd_apu_s + dt_apu
+            game.session_apu_s = game.session_apu_s + dt_apu
+
+            local t_ppu = now()
+            local buf = ppu.render_frame(game.cpu.mem, 0, 0, SCREEN_W, SCREEN_H)
+            local dt_ppu = now() - t_ppu
+            game.lcd_ppu_s = game.lcd_ppu_s + dt_ppu
+            game.session_ppu_s = game.session_ppu_s + dt_ppu
+
+            local t_present = now()
+            v:present(buf)
+            local dt_present = now() - t_present
+            game.lcd_present_s = game.lcd_present_s + dt_present
+            game.session_present_s = game.session_present_s + dt_present
+
+            game.lcd_frames = game.lcd_frames + 1
+            game.lcd_timer = game.lcd_timer + frame_time
+            game.session_elapsed_s = game.session_elapsed_s + raw_elapsed
+            -- scarta il periodo di avvio (transitori) e qualunque
+            -- campione oltre MAX_SANE_FPS (quasi certamente un
+            -- artefatto di misura, es. il primissimo giro del loop con
+            -- t-last_time quasi zero)
+            if game.session_elapsed_s >= WARMUP_S and raw_elapsed >= 1 / MAX_SANE_FPS then
+                game.session_frame_times[#game.session_frame_times + 1] = raw_elapsed
+            end
+            game.session_frames = game.session_frames + 1
+            if lcd_panel and game.lcd_timer >= LCD_UPDATE_INTERVAL then
+                local cpu_load_pct
+                cpu_load_pct, cpu_load_state = sysinfo.read_cpu_usage_pct(cpu_load_state)
+
+                throttled_timer = throttled_timer + game.lcd_timer
+                if throttled_timer >= THROTTLED_CHECK_INTERVAL or throttled_info == nil then
+                    throttled_info = sysinfo.read_throttled()
+                    throttled_timer = 0
+                end
+
+                lcd_panel:update({
+                    cpu_ms = game.lcd_cpu_s / game.lcd_frames * 1000,
+                    ppu_ms = game.lcd_ppu_s / game.lcd_frames * 1000,
+                    present_ms = game.lcd_present_s / game.lcd_frames * 1000,
+                    apu_ms = game.lcd_apu_s / game.lcd_frames * 1000,
+                    vram_pct = ppu.get_vram_usage_pct(game.cpu.mem),
+                    gfx_bank = game.cpu.current_gfx_bank,
+                    stage = game.cpu.current_stage,
+                    fps = math.floor(game.lcd_frames / game.lcd_timer + 0.5),
+                    cpu_load_pct = cpu_load_pct,
+                    temp_c = sysinfo.read_temp_c(),
+                    throttled = throttled_info,
+                })
+                game.lcd_timer, game.lcd_instr, game.lcd_cpu_s, game.lcd_ppu_s, game.lcd_present_s, game.lcd_apu_s, game.lcd_frames = 0, 0, 0, 0, 0, 0, 0
+            end
         end
 
         local elapsed = now() - t
         sleep(TICK_DT - elapsed)
     end
 
-    print_session_summary(session_frame_times, session_cpu_s, session_ppu_s, session_present_s,
-        session_apu_s, session_instr, session_frames)
-    if audio_out then audio_out:close() end
+    close_game(game)
     v:close()
 end
 

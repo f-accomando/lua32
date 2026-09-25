@@ -87,17 +87,25 @@ Se `test_video.lua` fallisce con *"Couldn't find matching render
 driver"*: l'overlay KMS non è attivo per davvero (punto 2) o manca un
 riavvio — non procedere oltre finché non passa.
 
-## 5. Demo giocabile end-to-end
+## 5. OS (cart-picker) + demo giocabile end-to-end
 
 ```sh
+luajit tests/pack_demo_cart.lua   # una tantum: crea cart/demo.cart
 ./run.sh
 ```
 
 (equivalente a `SDL_VIDEODRIVER=kmsdrm luajit main.lua`)
 
+`main.lua` ora mostra prima il cart-picker dell'OS (griglia delle
+cartucce in `cart/`), non lancia piu' il demo direttamente:
+
+- [ ] Si vede la griglia "S32 - CARTUCCE" con l'icona di "demo"
+- [ ] Frecce/WASD spostano il cursore, Invio/X avvia "demo"
 - [ ] Si vede lo sfondo blu scuro + il quadrato giallo su schermo, via HDMI
 - [ ] Frecce/WASD muovono lo sprite, si ferma ai bordi (clamp)
-- [ ] ESC chiude pulitamente
+- [ ] ESC durante il gioco torna al picker (pausa, non chiude) - l'icona di "demo" si marca con un "*" verde
+- [ ] Riselezionando "demo" si riprende esattamente da dove si era (posizione dello sprite invariata)
+- [ ] ESC nel picker senza nulla in pausa chiude pulitamente
 - [ ] Framerate visivamente fluido (non a scatti) — se sembra lento, non fidarsi dell'impressione: passare al benchmark sotto
 
 ## 6. Benchmark reale (il numero che conta davvero)
@@ -227,9 +235,10 @@ tutti). **TODO non fatto**: nessuna correzione implementata.
 git clone <URL_REPO> lua32 && cd lua32
 sudo sh tests/install_pi.sh
 # (riavviare se richiesto, poi ricollegarsi)
-for t in cpu assembler ppu cart demo_program; do luajit tests/test_$t.lua; done
+for t in cpu assembler ppu cart apu demo_program s32_os; do luajit tests/test_$t.lua; done
 SDL_VIDEODRIVER=kmsdrm luajit tests/test_video.lua
 SDL_VIDEODRIVER=kmsdrm luajit tests/test_input.lua
+luajit tests/pack_demo_cart.lua   # una tantum: crea cart/demo.cart
 ./run.sh
 luajit tests/bench.lua 2000
 ```

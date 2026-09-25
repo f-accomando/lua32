@@ -8,13 +8,11 @@ require() guardi il filesystem - un file locale os.lua non verrebbe
 MAI raggiunto da require("os"), tornerebbe sempre la libreria
 standard. Non un problema di stile, proprio irraggiungibile.
 
-Stato di questa prima release: solo la parte "logica" (scansione
-cart/dev, combo dev-mode con persistenza) - funzioni pure, testabili
-senza aprire una finestra SDL2 (vedi tests/test_s32_os.lua). La grafica del
-cart-picker (griglia di sprite stile icona "SD tagliata", vedi
-design.md "Icona cartuccia nell'OS") e il loop di pausa/ripresa in RAM
-sono il passo successivo, da integrare in main.lua - qui c'e' solo cio'
-che serve per arrivarci senza dover ancora decidere i dettagli grafici.
+Contiene la scansione cart/dev, la combo dev-mode con persistenza, e la
+macchina a stati della sessione (cursore nel picker, cartuccia in pausa
+in RAM, dialogo di conferma) - tutta logica pura, testabile senza aprire
+una finestra SDL2 (vedi tests/test_s32_os.lua). Il disegno vero e proprio
+vive in s32_os_ui.lua; l'integrazione nel loop di main.lua usa entrambi.
 
 Cartelle (vedi design.md "Struttura cartelle"):
   cart/<nome>.cart   - cartucce finite, sempre visibili nel picker
@@ -141,5 +139,126 @@ function M.toggle_dev_mode(cfg, config_path, os_config)
     print("s32: dev-mode " .. (cfg.dev_mode and "ATTIVATA" or "DISATTIVATA") .. " (permanente)")
     return cfg.dev_mode
 end
+
+-- new_edge_tracker(): come new_dev_toggle_tracker() ma per PIU' tasti
+-- insieme (su/giu/sinistra/destra/conferma/indietro per navigare il
+-- menu) - la navigazione deve avanzare di UNA cella per pressione, non
+-- ripetutamente finche' il tasto resta giu' come nel movimento di
+-- gioco. update(held) prende una tabella {su=bool, giu=bool, ...} con
+-- lo stato ATTUALE di ciascun tasto e ritorna quali sono scattati
+-- (fronte di salita) in questo frame.
+function M.new_edge_tracker()
+    local prev = {}
+    return {
+        update = function(_, held)
+            local edges = {}
+            for k, v in pairs(held) do
+                edges[k] = v and not prev[k]
+            end
+            prev = held
+            return edges
+        end,
+    }
+end
+
+-- -----------------------------------------------------------
+-- Session: stato del picker (cursore, cartuccia in pausa in RAM,
+-- eventuale dialogo di conferma) - macchina a stati pura, main.lua la
+-- guida e reagisce alle azioni che ritorna, senza che questo modulo
+-- sappia nulla di CPU/VRAM/SDL2.
+--
+-- Comportamento deciso con l'utente (vedi conversazione): ESC durante
+-- il gioco lo mette in pausa (congelato in RAM, non chiuso) e torna al
+-- picker; riselezionare la STESSA cartuccia riprende da dove si era;
+-- selezionarne un'ALTRA mentre una e' in pausa chiede conferma - "ok"
+-- la chiude e carica la nuova, "annulla" resta nel picker (la
+-- cartuccia in pausa NON riprende da sola, va riselezionata a mano,
+-- stesso comportamento di una home screen stile Switch).
+-- -----------------------------------------------------------
+local Session = {}
+Session.__index = Session
+
+function M.new_session()
+    return setmetatable({
+        cursor = 1,     -- indice 1-based nell'elenco corrente (convenzione Lua)
+        paused = nil,   -- {name=, kind=} della cartuccia congelata in RAM, o nil
+        pending = nil,  -- voce in attesa di conferma (stato "confirm_switch"), o nil
+    }, Session)
+end
+
+-- mode(): stato di visualizzazione corrente - "picker" o
+-- "confirm_switch" (il dialogo di conferma si sovrappone al picker,
+-- non e' un altro schermo separato - vedi s32_os_ui.render_confirm_dialog)
+function Session:mode()
+    return self.pending and "confirm_switch" or "picker"
+end
+
+-- move(dx, dy, entries, cols): sposta il cursore di una cella nella
+-- griglia (cols = s32_os_ui.grid_cols(w), stessa larghezza usata per
+-- disegnare - vedi s32_os_ui.lua). Si ferma al bordo, niente
+-- wrap-around (scelta semplice per la v1, cambiabile in seguito).
+function Session:move(dx, dy, entries, cols)
+    if #entries == 0 then return end
+    cols = math.max(1, cols)
+    local row = math.floor((self.cursor - 1) / cols)
+    local col = (self.cursor - 1) % cols
+    row = math.max(0, row + dy)
+    col = math.max(0, math.min(cols - 1, col + dx))
+    local n_rows = math.max(1, math.ceil(#entries / cols))
+    row = math.min(n_rows - 1, row)
+    local idx = row * cols + col + 1
+    if idx > #entries then idx = #entries end
+    self.cursor = idx
+end
+
+-- confirm(entries): l'utente preme "conferma" sulla voce sotto
+-- cursore. Ritorna una tabella {action=...} che main.lua esegue:
+--   {action="none"}                   - elenco vuoto, nessuna voce sotto cursore
+--   {action="resume"}                 - e' la stessa cartuccia gia' in pausa: riprendi
+--   {action="launch", entry=...}      - nessuna cartuccia in pausa: avvia direttamente
+--   {action="ask_confirm", entry=...} - un'ALTRA cartuccia e' in pausa: serve conferma
+--                                       (mode() passa a "confirm_switch")
+function Session:confirm(entries)
+    local entry = entries[self.cursor]
+    if not entry then return { action = "none" } end
+    if self.paused and self.paused.name == entry.name and self.paused.kind == entry.kind then
+        return { action = "resume" }
+    end
+    if self.paused then
+        self.pending = entry
+        return { action = "ask_confirm", entry = entry }
+    end
+    return { action = "launch", entry = entry }
+end
+
+-- confirm_switch_yes()/confirm_switch_no(): risposta al dialogo di
+-- conferma. "yes" ritorna la voce da lanciare e dimentica la vecchia
+-- cartuccia in pausa (main.lua deve scartarne lo stato/CPU); "no"
+-- torna semplicemente al picker, la cartuccia in pausa resta com'era.
+function Session:confirm_switch_yes()
+    local entry = self.pending
+    self.pending = nil
+    self.paused = nil
+    return entry
+end
+
+function Session:confirm_switch_no()
+    self.pending = nil
+end
+
+-- on_paused(entry): main.lua lo chiama quando l'utente preme ESC
+-- mentre "entry" sta girando - da questo momento e' lei la cartuccia
+-- "in pausa in RAM" per le decisioni di confirm() sopra.
+function Session:on_paused(entry)
+    self.paused = entry
+end
+
+-- on_closed(): la cartuccia in pausa e' stata scartata per davvero
+-- (confermato lo switch, o comunque terminata) - non e' piu' "in pausa".
+function Session:on_closed()
+    self.paused = nil
+end
+
+M.Session = Session
 
 return M
