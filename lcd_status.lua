@@ -55,7 +55,9 @@ local COLOR_ORANGE = { 230, 150, 40 }
 local COLOR_RED = { 210, 60, 50 }
 local COLOR_NEUTRAL = { 90, 170, 220 }
 local COLOR_EMPTY = { 40, 40, 50 }   -- segmento non riempito
+local COLOR_PEAK = { 130, 130, 140 } -- segmento MAI riempito ora, ma raggiunto in passato (peak-hold)
 local COLOR_TEXT = { 235, 235, 235 } -- etichetta/valore, sempre bianco (il colore "parla" nella barra)
+local COLOR_DIM = { 55, 55, 62 }     -- valore testuale "mai successo" (es. UNDV), appena visibile
 
 -- -----------------------------------------------------------
 -- pacchettizzazione RGB565 (vedi nota in testa al file sull'ordine byte)
@@ -99,21 +101,39 @@ local function draw_text(buf, width, height, x0, y0, text, r, g, b)
     end
 end
 
--- barra a segmenti: filled (0..BAR_SEGMENTS) segmenti nel colore dato,
--- il resto in COLOR_EMPTY - stessa idea dei mock-up "▮▮▯▯▯▯▯▯▯▯▯▯"
-local function draw_bar(buf, width, height, x0, y0, filled, color)
+-- barra a segmenti: filled (0..BAR_SEGMENTS) nel colore dato, oltre
+-- fino a peak_filled in COLOR_PEAK (grigio chiaro "peak-hold": il
+-- punto piu' alto mai raggiunto, cosi' resta visibile anche quando il
+-- valore attuale scende) - il resto in COLOR_EMPTY
+local function draw_bar(buf, width, height, x0, y0, filled, peak_filled, color)
     filled = math.max(0, math.min(BAR_SEGMENTS, filled))
+    peak_filled = math.max(0, math.min(BAR_SEGMENTS, peak_filled or 0))
     for i = 0, BAR_SEGMENTS - 1 do
-        local c = i < filled and color or COLOR_EMPTY
+        local c
+        if i < filled then
+            c = color
+        elseif i < peak_filled then
+            c = COLOR_PEAK
+        else
+            c = COLOR_EMPTY
+        end
         fill_rect(buf, width, height, x0 + i * (SEGMENT_W + SEGMENT_GAP), y0, SEGMENT_W, SEGMENT_H, c[1], c[2], c[3])
     end
 end
 
--- una riga completa: "LABEL valoreUNIT" a sinistra + barra colorata a destra
-local function draw_stat_row(buf, width, height, y, text, fraction, color)
+-- una riga completa: "LABEL valoreUNIT" a sinistra + barra colorata (con
+-- peak-hold) a destra. peak_state, se passato, e' la tabella
+-- self.peak_fraction dell'istanza LcdStatus: aggiorna key col massimo
+-- storico e lo ritorna, cosi' il chiamante non deve tenere lo stato a mano.
+local function draw_stat_row(buf, width, height, y, text, fraction, color, peak_state, peak_key)
     draw_text(buf, width, height, SCALE * 2, y, text, COLOR_TEXT[1], COLOR_TEXT[2], COLOR_TEXT[3])
     local filled = math.floor(fraction * BAR_SEGMENTS + 0.5)
-    draw_bar(buf, width, height, BAR_X, y + 2, filled, color)
+    local peak_filled = 0
+    if peak_state and peak_key then
+        peak_state[peak_key] = math.max(peak_state[peak_key] or 0, filled)
+        peak_filled = peak_state[peak_key]
+    end
+    draw_bar(buf, width, height, BAR_X, y + 2, filled, peak_filled, color)
 end
 
 -- -----------------------------------------------------------
@@ -141,6 +161,7 @@ function M.new(fb_path, bg_bin_path, width, height)
 
     self.frame = ffi.new("uint8_t[?]", n_bytes)
     self.frame_bytes = n_bytes
+    self.peak_fraction = {}  -- peak-hold per barra, vedi draw_stat_row/draw_bar
     return self
 end
 
@@ -174,7 +195,7 @@ function LcdStatus:update(stats)
     if stats.cpu_ms then
         local v = stats.cpu_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
-        draw_stat_row(self.frame, w, h, y, string.format("CPU %.2fMS", v), v / 40, color)
+        draw_stat_row(self.frame, w, h, y, string.format("CPU %.2fMS", v), v / 40, color, self.peak_fraction, "cpu")
         if stats.cpu_load_pct then
             local lv = stats.cpu_load_pct
             local lcolor = lv < 70 and COLOR_GREEN or (lv < 90 and COLOR_ORANGE or COLOR_RED)
@@ -187,7 +208,7 @@ function LcdStatus:update(stats)
     if stats.ppu_ms then
         local v = stats.ppu_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
-        draw_stat_row(self.frame, w, h, y, string.format("PPU %.2fMS", v), v / 40, color)
+        draw_stat_row(self.frame, w, h, y, string.format("PPU %.2fMS", v), v / 40, color, self.peak_fraction, "ppu")
         if stats.temp_c then
             local tv = stats.temp_c
             local tcolor = tv < 70 and COLOR_GREEN or (tv < 80 and COLOR_ORANGE or COLOR_RED)
@@ -197,17 +218,19 @@ function LcdStatus:update(stats)
     end
 
     -- GPU (present/blit su HDMI): scala 0-40ms, soglia 15ms. In coda:
-    -- indicatore throttling/sottovoltaggio (quadratino verde/rosso,
-    -- non testo - niente vero sensore di consumo sul Pi senza hardware
-    -- aggiuntivo, vedi sysinfo.lua).
+    -- "UNDV" (sottovoltaggio/throttling) - rosso se attivo ORA, arancio
+    -- se e' successo in passato ma ora e' rientrato, grigio spento se
+    -- non e' mai successo. Niente vero sensore di consumo sul Pi senza
+    -- hardware aggiuntivo, vedi sysinfo.lua.
     if stats.present_ms then
         local v = stats.present_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
-        draw_stat_row(self.frame, w, h, y, string.format("GPU %.2fMS", v), v / 40, color)
+        draw_stat_row(self.frame, w, h, y, string.format("GPU %.2fMS", v), v / 40, color, self.peak_fraction, "gpu")
         if stats.throttled then
-            local critical = stats.throttled.under_voltage_now or stats.throttled.throttled_now
-            local tcolor = critical and COLOR_RED or COLOR_GREEN
-            fill_rect(self.frame, w, h, EXTRA_X, y + 2, SEGMENT_H, SEGMENT_H, tcolor[1], tcolor[2], tcolor[3])
+            local now_critical = stats.throttled.under_voltage_now or stats.throttled.throttled_now
+            local ever_critical = stats.throttled.under_voltage_ever or stats.throttled.throttled_ever
+            local tcolor = now_critical and COLOR_RED or (ever_critical and COLOR_ORANGE or COLOR_DIM)
+            draw_text(self.frame, w, h, EXTRA_X, y, "UNDV", tcolor[1], tcolor[2], tcolor[3])
         end
         y = y + LINE_HEIGHT
     end
@@ -218,7 +241,8 @@ function LcdStatus:update(stats)
     if stats.gfx_bank ~= nil and stats.stage ~= nil then
         local pct = stats.vram_pct or 0
         draw_stat_row(self.frame, w, h, y,
-            string.format("VRAM B%d S%d", stats.gfx_bank, stats.stage), pct / 100, COLOR_NEUTRAL)
+            string.format("VRAM B%d S%d", stats.gfx_bank, stats.stage), pct / 100, COLOR_NEUTRAL,
+            self.peak_fraction, "vram")
         y = y + LINE_HEIGHT
     end
 
@@ -226,7 +250,7 @@ function LcdStatus:update(stats)
     if stats.fps then
         local v = stats.fps
         local color = v < 30 and COLOR_RED or (v < 60 and COLOR_ORANGE or COLOR_GREEN)
-        draw_stat_row(self.frame, w, h, y, string.format("FPS %d", v), v / 60, color)
+        draw_stat_row(self.frame, w, h, y, string.format("FPS %d", v), v / 60, color, self.peak_fraction, "fps")
     end
 
     local f = io.open(self.fb_path, "wb")
