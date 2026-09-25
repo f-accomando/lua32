@@ -200,6 +200,15 @@ M.CART_LOAD_ADDR = CART_LOAD_ADDR
 -- -----------------------------------------------------------
 -- main
 -- -----------------------------------------------------------
+-- pannello di stato sull'LCD SPI (opzionale, vedi lcd_status.lua) -
+-- l'HDMI e' l'unico output del gioco vero, l'LCD e' libero per
+-- diagnostica. Attivato solo con S32_LCD_STATUS=1 per non aggiungere
+-- costo (scrittura SPI) a chi non lo usa.
+local LCD_UPDATE_INTERVAL = 0.5  -- secondi fra un refresh del pannello e l'altro
+local function lcd_status_enabled()
+    return os.getenv("S32_LCD_STATUS") == "1"
+end
+
 local function main()
     local cpu = cpu_module.new()
     local oam_base = setup_demo_assets(cpu)
@@ -207,6 +216,16 @@ local function main()
     for i, b in ipairs(rom) do cpu.mem[CART_LOAD_ADDR + i - 1] = b end
 
     local v = video.new("s32 - demo", SCREEN_W, SCREEN_H, false)
+
+    local lcd_panel = nil
+    if lcd_status_enabled() then
+        local lcd_status = require("lcd_status")
+        lcd_panel = lcd_status.new(
+            os.getenv("S32_LCD_FB") or "/dev/fb0",
+            os.getenv("S32_LCD_BG") or "shinchan_565.bin",
+            480, 320)
+    end
+    local lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
 
     local running = true
     local accumulator = 0
@@ -222,14 +241,35 @@ local function main()
         accumulator = accumulator + frame_time
 
         local ticks = 0
+        local t_cpu = now()
         while accumulator >= TICK_DT and ticks < MAX_CATCHUP_TICKS do
-            cpu:run(CART_LOAD_ADDR, input.input_byte())
+            lcd_instr = lcd_instr + cpu:run(CART_LOAD_ADDR, input.input_byte())
             accumulator = accumulator - TICK_DT
             ticks = ticks + 1
         end
+        lcd_cpu_s = lcd_cpu_s + (now() - t_cpu)
 
+        local t_ppu = now()
         local buf = ppu.render_frame(cpu.mem, 0, 0, SCREEN_W, SCREEN_H)
+        lcd_ppu_s = lcd_ppu_s + (now() - t_ppu)
+
+        local t_present = now()
         v:present(buf)
+        lcd_present_s = lcd_present_s + (now() - t_present)
+
+        lcd_frames = lcd_frames + 1
+        lcd_timer = lcd_timer + frame_time
+        if lcd_panel and lcd_timer >= LCD_UPDATE_INTERVAL then
+            lcd_panel:update({
+                cpu_us_per_instr = lcd_instr > 0 and (lcd_cpu_s / lcd_instr * 1e6) or nil,
+                ppu_ms = lcd_ppu_s / lcd_frames * 1000,
+                present_ms = lcd_present_s / lcd_frames * 1000,
+                gfx_bank = cpu.current_gfx_bank,
+                stage = cpu.current_stage,
+                fps = math.floor(lcd_frames / lcd_timer + 0.5),
+            })
+            lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
+        end
 
         local elapsed = now() - t
         sleep(TICK_DT - elapsed)

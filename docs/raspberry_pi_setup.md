@@ -87,6 +87,24 @@ luajit tests/bench.lua 2000
       vedi `docs/scheda_tecnica.md`) — devono essere nello stesso ordine
       di grandezza, non serve identici
 
+## 6bis. Pannello di stato sull'LCD SPI (opzionale)
+
+Ora che HDMI è l'unico output del gioco, l'LCD SPI (verificato `/dev/fb0`
+sul tuo Pi — `fb_ili9486`, 480x320, RGB565, *non più* `/dev/fb1`: quel
+numero è cambiato da quando HDMI è passato a KMSDRM) è libero per un
+pannello diagnostico invece che restare spento.
+
+```sh
+python3 tests/shinchan_to_bin.py /home/pi/shinchan.png shinchan_565.bin   # una tantum
+S32_LCD_STATUS=1 ./run.sh
+```
+
+- [ ] Il disegno appare sull'LCD con sopra una fascia di statistiche live (CPU µs/istr, PPU ms, GPU/blit ms, banco grafica/stage, FPS)
+- [ ] Nessun rallentamento percepibile su HDMI (l'aggiornamento LCD è a bassa frequenza, ~2 volte al secondo, non ogni frame)
+
+Variabili opzionali: `S32_LCD_FB` (default `/dev/fb0`), `S32_LCD_BG`
+(default `shinchan_565.bin`, cercato nella directory corrente).
+
 ## 7. Dopo la verifica
 
 - [ ] Aggiornare `docs/scheda_tecnica.md`: sostituire "verifica in corso"
