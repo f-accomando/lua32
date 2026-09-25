@@ -88,7 +88,7 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 
 ---
 
-## Audio (motore di sintesi implementato e testato; uscita SDL2/HDMI non ancora collegata)
+## Audio (implementato, testato e collegato al gameplay - verificato sul Pi reale)
 
 | Caratteristica | Valore |
 |---|---|
@@ -99,7 +99,8 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 | Collocazione | Memory-mapped, `APU_BASE` (dopo le porte) — 16 byte/canale × 8 = 128 byte totali |
 | Registri per canale | FREQ (16-bit Hz), WAVEFORM, DUTY, VOLUME, ATTACK, DECAY, SUSTAIN, RELEASE, CONTROL (bit0=GATE) — 6 byte riservati per estensioni |
 | Implementazione | `apu.lua`, verificato con `tests/test_apu.lua` (forme d'onda, inviluppo, indipendenza canali, rumore) |
-| Uscita audio reale | **Non ancora implementata** — prossimo passo: SDL2 (stessa libreria di video/input) verso ALSA/HDMI |
+| Uscita audio reale | **Fatta** (`audio_out.lua`, SDL2 verso ALSA/HDMI) e verificata sul Pi reale — collegata al gameplay (SFX su bottone azione, canale 7) |
+| Controller | SDL_GameController (PS4 testato) — D-pad/azione in OR con la tastiera, riconoscimento anche a caldo |
 | Confronto Pico-8 | Pico-8: 4 canali, niente ADSR vero (solo effetti tipo fade). Noi: 8 canali, ADSR vero |
 | Confronto SNES vero | SNES: campioni BRR compressi + CPU SPC700 dedicata + eco/riverbero hardware. Noi: solo oscillatori (niente campioni), niente CPU dedicata, eco/riverbero rimandato a estensione futura |
 | Estensione futura possibile | Eco/riverbero (buffer di delay + filtro, stile SNES); campioni PCM veri in aggiunta al procedurale (non al posto) |
@@ -144,10 +145,10 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 
 ## Cosa manca ancora
 
-- **Audio**: motore di sintesi (`apu.lua`) fatto e testato — resta da collegare l'uscita reale (SDL2 verso ALSA/HDMI), ancora non implementata
+- ~~Audio~~ — **fatto**: motore (`apu.lua`), uscita (`audio_out.lua`), collegato al gameplay, tutto verificato sul Pi reale. Resta aperta solo l'eco/riverbero (estensione futura, mai pianificata per la v1)
 - **OS** (`os.lua`) — selezione cartucce, sospensione/ripresa, dev-mode: progettato, non costruito
 - **Editor** (`editor.lua`) — tab Codice/Grafica/Suoni: progettato, non costruito
-- ~~Formato cartuccia reale~~ — **fatto** (`cart.lua`): resta la pipeline sorgente `dev/` → `.cart` (dipende dall'editor) e il banco audio swappabile (dipende dall'uscita audio vera)
+- ~~Formato cartuccia reale~~ — **fatto** (`cart.lua`): resta la pipeline sorgente `dev/` → `.cart` (dipende dall'editor) e un eventuale banco audio swappabile (ora possibile, l'uscita audio è pronta - non ancora fatto perché non serve finché non esiste un editor/cartuccia vera con più suoni)
 - **ConsoleLang** — da decidere se portare o ripensare
 - **Salvataggio persistente** (save state) — non progettato
 - ~~Verifica completa su Raspberry Pi 1 reale~~ — **fatto** per CPU/PPU/video/input/cartuccia/LCD; PPU ottimizzata (~2x); ~38-40fps medi, minimo ~15fps
