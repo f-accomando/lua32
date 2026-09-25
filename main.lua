@@ -316,14 +316,6 @@ local function main()
     local lcd_panel, sysinfo = nil, nil
     local cpu_load_state, throttled_info, throttled_timer = nil, nil, 0
     local THROTTLED_CHECK_INTERVAL = 10.0  -- vcgencmd e' un sottoprocesso, va chiamato di rado
-    -- stato controller "premuto da almeno un tick dall'ultimo
-    -- aggiornamento LCD" - il pannello si aggiorna ogni 2s
-    -- (LCD_UPDATE_INTERVAL), una pressione piu' breve andrebbe altrimenti
-    -- persa se si guardasse solo lo stato ESATTO nel singolo istante
-    -- dell'aggiornamento. Fatto OR ad ogni tick, azzerato dopo ogni
-    -- lettura da parte del pannello.
-    local controller_held = { up=false, down=false, left=false, right=false,
-        x=false, o=false, square=false, triangle=false, l1=false, r1=false }
     if lcd_status_enabled() then
         local lcd_status = require("lcd_status")
         sysinfo = require("sysinfo")
@@ -408,15 +400,6 @@ local function main()
                 prev_action = action
             end
 
-            -- accumula "premuto da almeno un tick dall'ultimo
-            -- aggiornamento LCD" (vedi dichiarazione di controller_held)
-            local cs = input.controller_button_state()
-            if cs then
-                for k in pairs(controller_held) do
-                    if cs[k] then controller_held[k] = true end
-                end
-            end
-
             accumulator = accumulator - TICK_DT
             ticks = ticks + 1
         end
@@ -484,9 +467,7 @@ local function main()
                 cpu_load_pct = cpu_load_pct,
                 temp_c = sysinfo.read_temp_c(),
                 throttled = throttled_info,
-                controller = input.controller_connected() and controller_held or nil,
             })
-            for k in pairs(controller_held) do controller_held[k] = false end
             lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
         end
 
