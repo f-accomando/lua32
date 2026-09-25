@@ -48,20 +48,30 @@ luajit tests/test_demo_program.lua
 Questi non toccano SDL2/KMSDRM — se falliscono qui il problema è nella
 logica (CPU/PPU/formato cartuccia), non nel driver video.
 
-## 3bis. Se hai un desktop grafico attivo (Raspberry Pi OS "with desktop")
+## 3bis. Se `SDL_Init` fallisce con "kmsdrm not available"
 
-Il motore fa il proprio modesetting via SDL2/KMSDRM e ha bisogno di
-essere l'unico a controllare il DRM ("DRM master"). Se il Pi boota in
-un desktop grafico (Wayland/Wayfire, labwc, X11...), quel desktop tiene
-già il DRM e SDL2 fallisce con `kmsdrm not available` anche se il
-driver è compilato correttamente (verificalo con
-`luajit tests/probe_sdl_drivers.lua`) — è un conflitto di sessione, non
-un problema di pacchetti.
+Causa **confermata** su hardware reale (non era il sospetto iniziale
+di un desktop grafico — su un'immagine Lite senza desktop non c'entra):
+il **getty sulla console testuale** (`agetty` su tty1, anche quando i
+suoi parametri sembrano quelli di una console seriale) tiene il
+framebuffer via `fbcon` e questo basta a impedire a SDL2/KMSDRM di
+diventare "DRM master". Non compare né in `ps aux | grep luajit` né in
+`fuser /dev/dri/card0` — va cercato esplicitamente:
 
-- [ ] `systemctl status display-manager` non è "active (running)", oppure:
-- [ ] boot impostato su console (`sudo raspi-config` → System Options →
-      Boot / Auto Login → Console Autologin), sensato per un Pi dedicato
-      a fare solo da console s32
+```sh
+ps aux | grep getty
+sudo systemctl stop getty@tty1
+```
+
+Su un Pi dedicato a fare solo da console s32 (nessun login testuale
+locale serve davvero) ha senso disabilitarlo in modo permanente invece
+di fermarlo ad ogni riavvio:
+
+```sh
+sudo systemctl disable getty@tty1
+```
+
+- [ ] `SDL_VIDEODRIVER=kmsdrm luajit tests/test_video.lua` passa dopo aver fermato/disabilitato il getty
 
 ## 4. Test SDL2/video reali (KMSDRM)
 
