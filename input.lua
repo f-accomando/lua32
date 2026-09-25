@@ -85,6 +85,7 @@ local SDL_SCANCODE_D = 7
 local SDL_SCANCODE_SPACE = 44
 local SDL_SCANCODE_J = 13
 local SDL_SCANCODE_ESCAPE = 41
+local SDL_SCANCODE_LCTRL = 224  -- per la combo dev-mode, vedi dev_toggle_held()
 
 local M = {}
 
@@ -189,6 +190,22 @@ function M.input_byte()
     end
 
     return b
+end
+
+-- dev_toggle_held(): combo per attivare/disattivare la dev-mode
+-- dell'OS (vedi os.lua) - tastiera Ctrl+D, controller L1+R1 insieme.
+-- Ritorna solo lo stato "tenuto premuto adesso", il debounce/edge-
+-- detection (attiva solo al fronte di salita, non ripetutamente finche'
+-- resta premuto) e' responsabilita' del chiamante, stesso pattern gia'
+-- usato in main.lua per il bottone azione (prev_action).
+function M.dev_toggle_held()
+    local keys = sdl.SDL_GetKeyboardState(nil)
+    if keys[SDL_SCANCODE_LCTRL] ~= 0 and keys[SDL_SCANCODE_D] ~= 0 then return true end
+    if controller then
+        local g = sdl.SDL_GameControllerGetButton
+        if g(controller, BTN_LEFTSHOULDER) ~= 0 and g(controller, BTN_RIGHTSHOULDER) ~= 0 then return true end
+    end
+    return false
 end
 
 function M.menu_button_pressed()

@@ -146,7 +146,7 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 ## Cosa manca ancora
 
 - ~~Audio~~ — **fatto**: motore (`apu.lua`), uscita (`audio_out.lua`), collegato al gameplay, tutto verificato sul Pi reale. Resta aperta solo l'eco/riverbero (estensione futura, mai pianificata per la v1)
-- **OS** (`os.lua`) — selezione cartucce, sospensione/ripresa, dev-mode: progettato, non costruito
+- **OS** (`s32_os.lua`) — selezione cartucce, sospensione/ripresa, dev-mode: **in costruzione**. Fatto finora: font 8x8 maiuscole/minuscole (`font8x8.lua`), config persistente (`os_config.lua`), scansione `cart/`+`dev/`, combo dev-mode (Ctrl+D / L1+R1). Non ancora fatto: grafica del cart-picker (griglia di sprite), loop di pausa/ripresa in RAM, prompt di conferma cambio cartuccia
 - **Editor** (`editor.lua`) — tab Codice/Grafica/Suoni: progettato, non costruito
 - ~~Formato cartuccia reale~~ — **fatto** (`cart.lua`): resta la pipeline sorgente `dev/` → `.cart` (dipende dall'editor) e un eventuale banco audio swappabile (ora possibile, l'uscita audio è pronta - non ancora fatto perché non serve finché non esiste un editor/cartuccia vera con più suoni)
 - **ConsoleLang** — da decidere se portare o ripensare

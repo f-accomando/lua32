@@ -386,7 +386,9 @@ design per quando si costruisce l'OS.
   memory_map.lua     <- mappa indirizzi, unica fonte di verità
   assembler.lua      <- assembler ASM
   consolelang.lua    <- compilatore ConsoleLang (se mantenuto)
-  os.lua             <- OS: selezione cartucce, sospensione/ripresa, dev-mode
+  s32_os.lua         <- OS: selezione cartucce, sospensione/ripresa, dev-mode
+                        (non "os.lua": collide col nome della libreria
+                        standard di Lua, require("os") non lo troverebbe mai)
   editor.lua         <- editor unico a tab (Codice/Grafica/Suoni)
   profile.lua        <- profilo giocatore
   video.lua / input.lua / audio_out.lua  <- binding FFI diretti a SDL2
