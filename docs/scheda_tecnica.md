@@ -60,6 +60,7 @@ Misurato su Raspberry Pi 1 vero (ARMv6): **3.72 µs/istruzione** (LuaJIT) contro
 | STAGE_SELECT | +1 | Scrivere un numero copia la tilemap di quello stage in VRAM |
 | SCROLL_X / SCROLL_Y | +2 / +3 | Registri di scroll dello sfondo |
 | SOUND | +4 | Accoda un ID suono (APU, non ancora implementata) |
+| GFX_BANK_SELECT | +5 | Scrivere un numero copia directory+archivio grafico di quel banco in VRAM (formato cartuccia, vedi sotto) |
 | INPUT giocatore 2-8 | +0x10…+0x16 | Multiplayer locale |
 
 ---
@@ -98,6 +99,19 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 
 ---
 
+## Formato cartuccia
+
+| Caratteristica | Valore |
+|---|---|
+| Contenitore | File binario `.cart`, header a 256 byte (packed) + sezioni |
+| Header | Magic, versione, **uid** (16B), titolo, autore, data, offset/dimensione sezioni, **CRC32** (integrità), **SHA-256** (32B, riservato per autenticità/NFT future, non ancora calcolato) |
+| Sezioni | Codice · banchi di stage (32KB, tilemap) · banchi grafici (~520KB, directory+archivio) · palette iniziale (CGRAM, opzionale) |
+| Swap grafico | Porta `PORT_GFX_BANK_SELECT` — stesso meccanismo di `PORT_STAGE_SELECT`, esteso alla grafica |
+| Implementazione | `cart.lua` — `pack()`/`load()`/`install()`, verificato con `tests/test_cart.lua` (round-trip, esecuzione, rilevamento corruzione) |
+| Non ancora fatto | Banco audio swappabile (dipende da `apu.lua`); pipeline sorgente `dev/<cartuccia>/` (PNG/JSON) → `.cart` (dipende dall'editor) |
+
+---
+
 ## Input
 
 | Caratteristica | Valore |
@@ -125,7 +139,7 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 - **Audio** (`apu.lua`) — non implementato
 - **OS** (`os.lua`) — selezione cartucce, sospensione/ripresa, dev-mode: progettato, non costruito
 - **Editor** (`editor.lua`) — tab Codice/Grafica/Suoni: progettato, non costruito
-- **Formato cartuccia reale** — oggi `main.lua` assembla un demo al volo; manca un formato file con banchi di asset e meccanismo di swap (vedi `design.md`)
+- ~~Formato cartuccia reale~~ — **fatto** (`cart.lua`): resta la pipeline sorgente `dev/` → `.cart` (dipende dall'editor) e il banco audio swappabile (dipende da `apu.lua`)
 - **ConsoleLang** — da decidere se portare o ripensare
 - **Salvataggio persistente** (save state) — non progettato
 - Verifica completa su Raspberry Pi 1 reale (video, input, PPU, `bench.lua`) — in corso

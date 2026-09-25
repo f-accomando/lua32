@@ -213,6 +213,81 @@ istruzioni di un frame.
   scelta discrezionale (filosofia "meglio generosi" già del vecchio
   progetto), confermata con l'utente e non più in discussione.
 
+### Formato cartuccia (implementato)
+
+Un file `.cart` è un contenitore binario (`cart.lua`) con un header a
+dimensione fissa (256 byte, packed) seguito dai contenuti veri:
+
+- **Header**: magic (`S32CART1`), versione, **uid** (16 byte,
+  identificatore della cartuccia), titolo, autore, data di creazione,
+  offset/dimensione di ciascuna sezione, **content_crc32** (integrità:
+  rileva corruzione accidentale del file) e **content_sha256** (32
+  byte, riservato ma non ancora calcolato — vedi "Autenticità/NFT"
+  sotto).
+- **Codice**: i byte assemblati (oggi prodotti da `assembler.lua`, in
+  futuro anche da un eventuale ConsoleLang).
+- **Banchi di stage** (tilemap, 32KB l'uno): stesso identico
+  meccanismo già in uso per `PORT_STAGE_SELECT`, solo ora popolato dal
+  contenuto del file invece che da dati scritti a mano in `main.lua`.
+- **Banchi grafici** (directory+archivio, ~520KB l'uno): stessa idea
+  estesa alla grafica, via la nuova porta `PORT_GFX_BANK_SELECT`
+  (`memory_map.lua`) — scrivere un numero di banco copia
+  istantaneamente quella directory+archivio dentro la VRAM attiva
+  (`cpu.gfx_banks[n]`, popolato dal loader). Questo è il meccanismo di
+  swap discusso sopra: la cartuccia su disco può avere N banchi
+  grafici, la VRAM ne tiene sempre e solo uno attivo.
+- **Palette iniziale** (CGRAM, 6KB, opzionale): se presente viene
+  copiata in CGRAM al caricamento.
+
+`cart.pack(spec, path)` scrive il file da bytes già pronti (codice +
+banchi), `cart.load(path)` lo rilegge e verifica il CRC32,
+`cart.install(cpu, cart, load_addr)` lo installa in una CPU (copia il
+codice, registra `cpu.stages`/`cpu.gfx_banks`, fa lo swap iniziale a
+banco 0). Verificato con `tests/test_cart.lua` (round-trip
+byte-per-byte, esecuzione del codice caricato, rilevamento di un file
+corrotto).
+
+**Cosa NON fa ancora, deliberatamente**: non esiste una pipeline
+`dev/<cartuccia>/` (cartella sorgente con PNG/JSON) → `.cart` — non ha
+senso costruirla prima che esista l'editor stesso (è l'editor che
+produrrebbe quei sorgenti). Oggi `cart.pack()` lavora al livello che
+`main.lua` già usa (bytes pronti), che è il livello giusto finché
+l'editor non esiste.
+
+### Autenticità cartuccia / possibili NFT (futuro, deliberatamente aperto)
+
+Interesse futuro dell'utente: poter distribuire cartucce come NFT, per
+dare la possibilità di riconoscere/scambiare cartucce "originali" e
+dare ai developer un token di apprezzamento/vendita. Il motore stesso
+resta agnostico rispetto a blockchain/NFT — quel livello vive
+interamente fuori dall'engine (in una eventuale registry/marketplace
+esterno). Quello che il **formato cartuccia** già prepara, per non
+dover rompere compatibilità in futuro:
+
+- **`uid`** (16 byte, nell'header): identificatore univoco della
+  cartuccia, generato una volta al pack (`cart.new_uid()`), stabile
+  per tutta la vita del file — il "numero seriale" richiesto.
+- **`content_sha256`** (32 byte, riservato): hash crittografico del
+  contenuto, per legare univocamente un file a un record esterno
+  (NFT/registry). Oggi zero-riempito — l'integrità del file è comunque
+  garantita da CRC32, l'hash crittografico si implementa quando esiste
+  un uso reale a valle (nessuna libreria SHA-256 nel progetto ancora,
+  aggiunta prematura altrimenti).
+
+Tutto il resto (mint, marketplace, verifica on-chain) resta
+esplicitamente non progettato.
+
+### Icona cartuccia nell'OS (futuro, solo visivo)
+
+Idea dell'utente: dare all'icona di una cartuccia, nella griglia di
+selezione dell'OS (cart-picker), una forma che richiami le schede SD
+grandi — **angolo inferiore sinistro tagliato**. Chiarito esplicitamente
+che è **solo la forma dell'icona/asset visivo nell'interfaccia**, NON
+un fattore di forma hardware fisico (nessuna cartuccia fisica reale è
+in programma). Riguarda l'OS/cart-picker, non ancora costruito — nessun
+asset o codice creato per questo, solo annotato qui come nota di
+design per quando si costruisce l'OS.
+
 ## Libreria grafica/input/audio
 
 - **LuaJIT nudo + FFI + SDL2 diretto** (NON LÖVE2D o altro framework).
@@ -304,9 +379,16 @@ tests/               <- test automatici + altri script di supporto (benchmark, t
 - Se/come l'OS gestisce il salvataggio dello stato (save state) dato
   che ora sospende invece di chiudere.
 - Download cartucce (deliberatamente sospeso).
-- **Formato cartuccia vero**, con banchi di grafica/audio e un
-  meccanismo di swap (estensione di `PORT_STAGE_SELECT`) — oggi
-  `main.lua` assembla un demo al volo, non esiste ancora un formato
-  file/pacchetto per una cartuccia reale.
+- ~~Formato cartuccia vero, con banchi di grafica/audio e un
+  meccanismo di swap~~ — **fatto**: contenitore binario `.cart`
+  (`cart.lua`) con banchi di stage e grafica swappabili via
+  `PORT_GFX_BANK_SELECT`, vedi "Cartucce" sopra. Ancora aperto: banco
+  audio (quando esiste `apu.lua`), e la pipeline sorgente
+  `dev/<cartuccia>/` → `.cart` (dipende dall'editor, non ancora
+  costruito).
 - Eventuale regione per coprocessori (concetto separato dallo swap di
   banchi, vedi "Cartucce" sopra) — non ancora progettata.
+- Hash crittografico reale (`content_sha256`) nell'header cartuccia —
+  campo riservato, non ancora calcolato (vedi "Autenticità/NFT").
+- Icona cartuccia nel cart-picker dell'OS (forma "SD tagliata") — solo
+  annotato, nessun asset/codice ancora.

@@ -1,5 +1,5 @@
 --[[
-cpu.lua - nucleo CPU di s32. LuaJIT, 82 opcode (54 base + 28
+cpu.lua - nucleo CPU di s32. LuaJIT, 83 opcode (55 base + 28
 indicizzati ,X/,Y aggiunti nel redesign - vedi docs/design.md "CPU").
 
 Stessa filosofia del vecchio motore Python: registri A/X/Y a 16-bit,
@@ -26,6 +26,8 @@ local WRAM_END = mm.WRAM_END
 local VRAM_BASE = mm.VRAM_BASE
 local TILEMAP_VRAM_OFFSET = mm.TILEMAP_VRAM_OFFSET
 local TILEMAP_BYTES = mm.TILEMAP_BYTES
+local DIRECTORY_VRAM_OFFSET = mm.DIRECTORY_VRAM_OFFSET
+local GFX_BANK_BYTES = mm.DIRECTORY_BYTES + mm.GRAPHICS_POOL_BYTES
 
 local FLAG_ZERO = mm.FLAG_ZERO
 local FLAG_NEGATIVE = mm.FLAG_NEGATIVE
@@ -37,6 +39,7 @@ local PORT_STAGE_SELECT = mm.PORT_STAGE_SELECT
 local PORT_SCROLL_X = mm.PORT_SCROLL_X
 local PORT_SCROLL_Y = mm.PORT_SCROLL_Y
 local PORT_SOUND = mm.PORT_SOUND
+local PORT_GFX_BANK_SELECT = mm.PORT_GFX_BANK_SELECT
 
 local IS_INPUT_PORT = {[PORT_INPUT] = true}
 for _, p in ipairs(mm.EXTRA_INPUT_PORTS) do IS_INPUT_PORT[p] = true end
@@ -56,6 +59,8 @@ function M.new()
     self.stages = {}        -- popolato dall'host prima di avviare il
                               -- ciclo di gioco - vedi PORT_STAGE_SELECT
     self.current_stage = 0
+    self.gfx_banks = {}     -- popolato dall'host - vedi PORT_GFX_BANK_SELECT
+    self.current_gfx_bank = 0
     self.scroll_x, self.scroll_y = 0, 0
     self.sound_queue = {}   -- ID suoni richiesti in questo frame - il
                               -- motore la svuota dopo ogni run()
@@ -80,6 +85,14 @@ function CPU:write16(addr, value)
         if data ~= nil then
             ffi.copy(self.mem + VRAM_BASE + TILEMAP_VRAM_OFFSET, data, TILEMAP_BYTES)
             self.current_stage = value
+        end
+        return
+    end
+    if addr == PORT_GFX_BANK_SELECT then
+        local data = self.gfx_banks[value]
+        if data ~= nil then
+            ffi.copy(self.mem + VRAM_BASE + DIRECTORY_VRAM_OFFSET, data, GFX_BANK_BYTES)
+            self.current_gfx_bank = value
         end
         return
     end

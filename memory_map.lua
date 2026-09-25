@@ -141,6 +141,13 @@ M.PORT_SOUND = M.PORTS_BASE + 4          -- scrivere un ID suono lo accoda -
                                            -- regione audio memory-mapped (APU,
                                            -- vedi docs/design.md), non piu' a un
                                            -- asset esterno
+M.PORT_GFX_BANK_SELECT = M.PORTS_BASE + 5  -- stesso principio di PORT_STAGE_SELECT,
+                                           -- ma per la grafica: scrivere un numero
+                                           -- di banco copia ISTANTANEAMENTE
+                                           -- directory+archivio grafico dentro VRAM
+                                           -- (dati registrati prima dall'host in
+                                           -- cpu.gfx_banks) - vedi docs/design.md
+                                           -- "Cartucce" e "Formato cartuccia"
 
 M.EXTRA_INPUT_PORTS = {
     M.PORTS_BASE + 0x10,  -- giocatore 2 (indice 1)
