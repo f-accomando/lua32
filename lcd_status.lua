@@ -162,6 +162,7 @@ function M.new(fb_path, bg_bin_path, width, height)
     self.frame = ffi.new("uint8_t[?]", n_bytes)
     self.frame_bytes = n_bytes
     self.peak_fraction = {}  -- peak-hold per barra, vedi draw_stat_row/draw_bar
+    self.first_write = true  -- vedi update(): la prima scrittura è sempre completa
     return self
 end
 
@@ -253,9 +254,27 @@ function LcdStatus:update(stats)
         draw_stat_row(self.frame, w, h, y, string.format("FPS %d", v), v / 60, color, self.peak_fraction, "fps")
     end
 
-    local f = io.open(self.fb_path, "wb")
+    -- scrittura: la parte "immagine" (sopra bar_y) non cambia mai dopo
+    -- la primissima scrittura - solo la fascia delle barre in basso
+    -- cambia ad ogni update(). Un frame intero (307KB per 480x320) sono
+    -- circa 30ms di trasferimento SPI (il driver dichiara ~33fps di
+    -- refresh massimo) - una scrittura COMPLETA ogni 2s blocca il game
+    -- loop per quel tempo ad ogni volta (misurato sul Pi: gli stessi
+    -- "frame peggiori" nel riepilogo di sessione coincidono in numero
+    -- con le scritture LCD durante quella sessione). Scrivendo solo la
+    -- fascia cambiata (circa 1/3 dell'altezza) lo stallo si riduce
+    -- proporzionalmente.
+    local f = io.open(self.fb_path, "r+b") or io.open(self.fb_path, "wb")
     if f then
-        f:write(ffi.string(self.frame, self.frame_bytes))
+        if self.first_write then
+            f:write(ffi.string(self.frame, self.frame_bytes))
+            self.first_write = false
+        else
+            local row_bytes = self.width * 2
+            local offset = bar_y * row_bytes
+            f:seek("set", offset)
+            f:write(ffi.string(self.frame + offset, self.frame_bytes - offset))
+        end
         f:close()
     end
 end
