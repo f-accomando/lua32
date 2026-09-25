@@ -169,6 +169,50 @@ istruzioni di un frame.
   stesso vincolo naturale che già esiste, nessun tetto artificiale
   in più (coerente con l'aver scartato i token).
 
+- **IMPORTANTE — correzione rispetto a una prima idea**: una cartuccia
+  grande NON significa che tutto il suo contenuto debba stare
+  residente in VRAM/APU contemporaneamente. Il bus a 24-bit flat
+  garantisce solo che l'indirizzamento sia unico e senza banking — non
+  impone che i 552KB di VRAM (o la futura regione APU) debbano
+  contenere OGNI asset della cartuccia insieme. Le vere console
+  funzionavano così: lo SNES vero aveva solo 64KB di VRAM fisica anche
+  con cartucce da 6MB — il gioco copiava (DMA) solo la grafica della
+  scena ATTUALE, sostituendola ai cambi di livello/mondo.
+
+  Abbiamo già questo esatto meccanismo per un solo tipo di dato:
+  `PORT_STAGE_SELECT` copia istantaneamente la tilemap di uno stage
+  dentro la (piccola, fissa) VRAM attiva — i dati di TUTTI gli stage
+  vivono nel file della cartuccia (`cpu.stages`, sul filesystem host),
+  non tutti in memoria emulata insieme. La stessa idea si estende
+  naturalmente a banchi di grafica (e potenzialmente audio): la
+  cartuccia su disco può essere molto più grande di 552KB (un
+  riferimento comodo per confronto è l'intervallo dei cartucce SNES
+  veri, 256KB-6MB), mentre l'archivio grafico ATTIVO resta piccolo e
+  fisso — il gioco (o il motore per suo conto) fa lo swap quando
+  serve, invece di richiedere una VRAM residente enorme. Il formato
+  cartuccia vero (banchi + meccanismo di swap) è ancora da progettare
+  — vedi "punti ancora aperti" in fondo.
+
+- **Distinto dai coprocessori**: il vecchio progetto aveva riservato
+  spazio ("roadmap punto 1", mai implementato) per eventuali chip
+  coprocessori aggiuntivi (come il SuperFX dello SNES vero) — registri
+  memory-mapped per parlare con hardware di calcolo EXTRA che alcune
+  cartucce potrebbero portarsi dietro. È un concetto ORTOGONALE allo
+  swap di banchi sopra: quello è spazio per più CONTENUTO (asset),
+  questo è capacità di CALCOLO in più — non competono per lo stesso
+  spazio, sono due regioni diverse ritagliate dai ~15MB liberi che il
+  bus a 24-bit lascia comunque disponibili.
+
+- **Perché l'archivio grafico è 512KB e non i vecchi 96-128KB**: la
+  tabella "directory" (8KB, vedi sopra) è un costo strutturalmente
+  necessario del passaggio a tile a taglia variabile (l'indirizzamento
+  a moltiplicazione fissa del vecchio motore non funziona più quando i
+  tile hanno byte-size diversi) — non negoziabile una volta decise le
+  taglie variabili. La crescita dell'archivio vero e proprio
+  (96KB→512KB, da 96 a 2048 tile indirizzabili) è invece stata una
+  scelta discrezionale (filosofia "meglio generosi" già del vecchio
+  progetto), confermata con l'utente e non più in discussione.
+
 ## Libreria grafica/input/audio
 
 - **LuaJIT nudo + FFI + SDL2 diretto** (NON LÖVE2D o altro framework).
@@ -260,3 +304,9 @@ tests/               <- test automatici + altri script di supporto (benchmark, t
 - Se/come l'OS gestisce il salvataggio dello stato (save state) dato
   che ora sospende invece di chiudere.
 - Download cartucce (deliberatamente sospeso).
+- **Formato cartuccia vero**, con banchi di grafica/audio e un
+  meccanismo di swap (estensione di `PORT_STAGE_SELECT`) — oggi
+  `main.lua` assembla un demo al volo, non esiste ancora un formato
+  file/pacchetto per una cartuccia reale.
+- Eventuale regione per coprocessori (concetto separato dallo swap di
+  banchi, vedi "Cartucce" sopra) — non ancora progettata.
