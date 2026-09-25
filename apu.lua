@@ -94,95 +94,126 @@ function M.new(sample_rate)
             noise_value = -1.0,
         }
     end
+
+    -- scratch per-canale riusato ad ogni generate() invece di essere
+    -- ricreato - vedi generate() per il perche' (i registri non
+    -- cambiano DURANTE una chiamata, quindi si leggono una volta sola
+    -- per canale, non una volta per campione)
+    self.ch_freq, self.ch_waveform, self.ch_duty, self.ch_volume = {}, {}, {}, {}
+    self.ch_gate, self.ch_sustain = {}, {}
+    self.ch_attack_inc, self.ch_decay_inc, self.ch_release_inc = {}, {}, {}
+
     return self
-end
-
--- avanza l'inviluppo di un canale di un campione, secondo lo stadio
--- corrente - ritorna il livello 0..255 aggiornato
-local function step_envelope(st, gate, attack, decay, sustain, release, sample_rate)
-    if gate and not st.gated_prev then
-        st.env_stage = "attack"
-        st.env_level = 0.0
-    elseif (not gate) and st.gated_prev then
-        st.env_stage = "release"
-    end
-    st.gated_prev = gate
-
-    if st.env_stage == "attack" then
-        st.env_level = st.env_level + M.rate_increment(attack, sample_rate)
-        if st.env_level >= 255 then
-            st.env_level = 255
-            st.env_stage = "decay"
-        end
-    elseif st.env_stage == "decay" then
-        st.env_level = st.env_level - M.rate_increment(decay, sample_rate)
-        if st.env_level <= sustain then
-            st.env_level = sustain
-            st.env_stage = "sustain"
-        end
-    elseif st.env_stage == "sustain" then
-        st.env_level = sustain
-    elseif st.env_stage == "release" then
-        st.env_level = st.env_level - M.rate_increment(release, sample_rate)
-        if st.env_level <= 0 then
-            st.env_level = 0
-            st.env_stage = "idle"
-        end
-    end
-    return st.env_level
 end
 
 -- genera n_samples campioni PCM mono a 16-bit, mixando tutti gli 8
 -- canali - da chiamare una volta per frame (vedi main.lua), non per
--- singolo campione
+-- singolo campione.
+--
+-- Misurato sul Pi reale: questo era il vero costo nascosto dell'audio
+-- (9.78ms/frame, alla pari di PPU/GPU - mai trascurabile come assunto
+-- dalla sandbox x86). La causa: i registri di un canale sono costanti
+-- per TUTTA la durata di una singola generate() (il gioco puo'
+-- scriverli solo FRA una chiamata e l'altra, mai mentre gira), ma il
+-- codice li rileggeva da mem e ricalcolava gli incrementi ADSR (una
+-- divisione ciascuno) per OGNI campione di OGNI canale - fino a
+-- ~370 campioni x 8 canali x 3 divisioni = oltre 8800 divisioni inutili
+-- al frame. Ora si leggono e si calcolano una volta sola per canale
+-- prima del loop sui campioni; il loop caldo lavora solo su numeri gia'
+-- pronti (nessuna lettura di memoria, nessuna divisione, nessuna
+-- chiamata a funzione - le stesse M.square_wave/triangle_wave/ecc.
+-- restano definite sopra solo per i test, qui sono inlineate).
 function Apu:generate(mem, n_samples)
     local buf = ffi.new("int16_t[?]", n_samples)
     local base = mm.APU_BASE
     local CH_BYTES = mm.APU_CHANNEL_BYTES
     local sample_rate = self.sample_rate
     local n_channels = mm.APU_CHANNEL_COUNT
+    local channels = self.channels
+
+    local freq_a, wave_a, duty_a, vol_a = self.ch_freq, self.ch_waveform, self.ch_duty, self.ch_volume
+    local gate_a, sus_a = self.ch_gate, self.ch_sustain
+    local atk_a, dec_a, rel_a = self.ch_attack_inc, self.ch_decay_inc, self.ch_release_inc
+
+    for ch = 0, n_channels - 1 do
+        local reg = base + ch * CH_BYTES
+        freq_a[ch] = mem[reg + mm.APU_REG_FREQ_LO] + mem[reg + mm.APU_REG_FREQ_HI] * 256
+        wave_a[ch] = mem[reg + mm.APU_REG_WAVEFORM]
+        duty_a[ch] = mem[reg + mm.APU_REG_DUTY] / 255
+        vol_a[ch] = mem[reg + mm.APU_REG_VOLUME] / 255
+        gate_a[ch] = bit.band(mem[reg + mm.APU_REG_CONTROL], mm.APU_CONTROL_GATE) ~= 0
+        sus_a[ch] = mem[reg + mm.APU_REG_SUSTAIN]
+        atk_a[ch] = M.rate_increment(mem[reg + mm.APU_REG_ATTACK], sample_rate)
+        dec_a[ch] = M.rate_increment(mem[reg + mm.APU_REG_DECAY], sample_rate)
+        rel_a[ch] = M.rate_increment(mem[reg + mm.APU_REG_RELEASE], sample_rate)
+    end
+
+    local WAVE_NOISE = mm.APU_WAVEFORM_NOISE
+    local WAVE_SQUARE = mm.APU_WAVEFORM_SQUARE
+    local WAVE_TRIANGLE = mm.APU_WAVEFORM_TRIANGLE
+    local floor = math.floor
 
     for s = 0, n_samples - 1 do
         local mix = 0.0
         for ch = 0, n_channels - 1 do
-            local st = self.channels[ch]
-            local reg = base + ch * CH_BYTES
+            local st = channels[ch]
+            local gate = gate_a[ch]
 
-            local freq = bit.bor(mem[reg + mm.APU_REG_FREQ_LO], bit.lshift(mem[reg + mm.APU_REG_FREQ_HI], 8))
-            local waveform = mem[reg + mm.APU_REG_WAVEFORM]
-            local duty = mem[reg + mm.APU_REG_DUTY] / 255
-            local volume = mem[reg + mm.APU_REG_VOLUME] / 255
-            local attack = mem[reg + mm.APU_REG_ATTACK]
-            local decay = mem[reg + mm.APU_REG_DECAY]
-            local sustain = mem[reg + mm.APU_REG_SUSTAIN]
-            local release = mem[reg + mm.APU_REG_RELEASE]
-            local gate = bit.band(mem[reg + mm.APU_REG_CONTROL], mm.APU_CONTROL_GATE) ~= 0
+            if gate and not st.gated_prev then
+                st.env_stage = "attack"
+                st.env_level = 0.0
+            elseif (not gate) and st.gated_prev then
+                st.env_stage = "release"
+            end
+            st.gated_prev = gate
 
-            local env = step_envelope(st, gate, attack, decay, sustain, release, sample_rate) / 255
+            local stage = st.env_stage
+            local level = st.env_level
+            local sustain = sus_a[ch]
+            if stage == "attack" then
+                level = level + atk_a[ch]
+                if level >= 255 then level = 255; stage = "decay" end
+            elseif stage == "decay" then
+                level = level - dec_a[ch]
+                if level <= sustain then level = sustain; stage = "sustain" end
+            elseif stage == "sustain" then
+                level = sustain
+            elseif stage == "release" then
+                level = level - rel_a[ch]
+                if level <= 0 then level = 0; stage = "idle" end
+            end
+            st.env_stage = stage
+            st.env_level = level
 
+            local waveform = wave_a[ch]
+            local freq = freq_a[ch]
             local value
-            if waveform == mm.APU_WAVEFORM_NOISE then
+            if waveform == WAVE_NOISE then
                 st.phase = st.phase + freq / sample_rate
                 if st.phase >= 1.0 then
-                    st.phase = st.phase - math.floor(st.phase)
-                    local new_lfsr, out_bit = M.noise_step(st.lfsr)
-                    st.lfsr = new_lfsr
-                    st.noise_value = out_bit == 1 and 1.0 or -1.0
+                    st.phase = st.phase - floor(st.phase)
+                    local lfsr = st.lfsr
+                    local bit0 = bit.band(lfsr, 1)
+                    local bit1 = bit.band(bit.rshift(lfsr, 1), 1)
+                    local feedback = bit.bxor(bit0, bit1)
+                    st.lfsr = bit.bor(bit.rshift(lfsr, 1), bit.lshift(feedback, 14))
+                    st.noise_value = bit0 == 1 and 1.0 or -1.0
                 end
                 value = st.noise_value
             else
-                st.phase = st.phase + freq / sample_rate
-                st.phase = st.phase - math.floor(st.phase)
-                if waveform == mm.APU_WAVEFORM_SQUARE then
-                    value = M.square_wave(st.phase, duty)
-                elseif waveform == mm.APU_WAVEFORM_TRIANGLE then
-                    value = M.triangle_wave(st.phase)
+                local phase = st.phase + freq / sample_rate
+                phase = phase - floor(phase)
+                st.phase = phase
+                if waveform == WAVE_SQUARE then
+                    value = phase < duty_a[ch] and 1.0 or -1.0
+                elseif waveform == WAVE_TRIANGLE then
+                    value = phase < 0.5 and (-1.0 + 4.0 * phase) or (3.0 - 4.0 * phase)
                 else
-                    value = M.sawtooth_wave(st.phase)
+                    value = 2.0 * phase - 1.0
                 end
             end
 
-            mix = mix + value * env * volume
+            mix = mix + value * (level / 255) * vol_a[ch]
         end
 
         -- somma diretta, NIENTE divisione fissa per n_channels: un
@@ -192,7 +223,7 @@ function Apu:generate(mem, n_samples)
         -- compromesso di un mixer hardware semplice reale, non della
         -- normalizzazione automatica di un DAW.
         if mix > 1.0 then mix = 1.0 elseif mix < -1.0 then mix = -1.0 end
-        buf[s] = math.floor(mix * 32767)
+        buf[s] = floor(mix * 32767)
     end
 
     return buf
