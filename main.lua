@@ -297,7 +297,13 @@ local function main()
             os.getenv("S32_LCD_BG") or "shinchan_565.bin",
             480, 320)
     end
-    local lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
+    -- lcd_timer parte gia' al valore soglia: il primissimo aggiornamento
+    -- (che disegna anche l'immagine di sfondo per la prima volta, vedi
+    -- lcd_status.lua self.first_write) scatta al primo frame utile
+    -- invece di aspettare LCD_UPDATE_INTERVAL secondi a vuoto - senza
+    -- questo il pannello resta "spento" per i primi 2s dopo l'avvio,
+    -- facile da scambiare per un bug quando in realta' e' solo un'attesa.
+    local lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = LCD_UPDATE_INTERVAL, 0, 0, 0, 0, 0
 
     -- accumulatori per l'intera sessione (non si azzerano mai, a
     -- differenza di quelli sopra che alimentano l'LCD ogni 0.5s) - per
