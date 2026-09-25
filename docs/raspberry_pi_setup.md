@@ -130,6 +130,28 @@ S32_LCD_STATUS=1 ./run.sh
 Variabili opzionali: `S32_LCD_FB` (default `/dev/fb0`), `S32_LCD_BG`
 (default `shinchan_565.bin`, cercato nella directory corrente).
 
+## 6.1 Uscita analogica (RCA + jack) vs digitale (HDMI), WiFi vs Ethernet
+
+Per confrontare consumo/prestazioni fra le due configurazioni senza
+modificare `config.txt`/rete a mano ogni volta:
+
+```sh
+sudo sh tests/switch_output.sh --status    # stato attuale (video/audio/rete)
+sudo sh tests/switch_output.sh --analog    # RCA + jack 3.5mm (richiede riavvio)
+sudo sh tests/switch_output.sh --digital   # HDMI video+audio (richiede riavvio)
+sudo sh tests/switch_output.sh --eth       # Ethernet attiva, WiFi spenta (a caldo)
+sudo sh tests/switch_output.sh --wifi      # WiFi attivo, Ethernet spenta (a caldo)
+```
+
+`--wifi`/`--eth` si auto-annullano dopo 25s se non confermi con
+`sudo sh tests/switch_output.sh --confirm` - pensato apposta per non
+restare tagliati fuori se si spegne l'interfaccia usata dalla sessione
+SSH corrente. `--analog`/`--digital` stampano prima l'estratto vero del
+README degli overlay di questo Pi (il parametro `composite` non è mai
+stato verificato su hardware reale da questa sessione di sviluppo,
+verificalo ad occhio prima di riavviare) - vedi i commenti in testa a
+`tests/switch_output.sh` per i dettagli.
+
 ## 7. Dopo la verifica
 
 - [ ] Aggiornare `docs/scheda_tecnica.md`: sostituire "verifica in corso"
