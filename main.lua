@@ -232,9 +232,6 @@ local function main()
     local last_time = now()
 
     while running do
-        if input.poll() then running = false end
-        if input.menu_button_pressed() then running = false end
-
         local t = now()
         local frame_time = math.min(t - last_time, TICK_DT * MAX_CATCHUP_TICKS)
         last_time = t
@@ -243,6 +240,18 @@ local function main()
         local ticks = 0
         local t_cpu = now()
         while accumulator >= TICK_DT and ticks < MAX_CATCHUP_TICKS do
+            -- poll() (svuota la coda eventi, aggiorna lo stato tastiera
+            -- che input_byte() legge) va fatto ad ogni tick, non una
+            -- sola volta per frame renderizzato: se il rendering e'
+            -- lento (present() e' il costo maggiore su hardware debole,
+            -- vedi tests/bench.lua) il framerate reale puo' scendere
+            -- ben sotto i 60Hz del tick, e con lui la frequenza con cui
+            -- si guarda la tastiera - una pressione breve rischia di
+            -- sparire fra un frame e l'altro. Qui dentro gira sempre a
+            -- 60Hz nominali, indipendentemente da quanto sia lento il
+            -- resto del frame.
+            if input.poll() then running = false end
+            if input.menu_button_pressed() then running = false end
             lcd_instr = lcd_instr + cpu:run(CART_LOAD_ADDR, input.input_byte())
             accumulator = accumulator - TICK_DT
             ticks = ticks + 1
