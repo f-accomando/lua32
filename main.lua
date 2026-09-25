@@ -263,8 +263,8 @@ local function print_session_summary(frame_times_s, cpu_s, ppu_s, present_s, ins
     print(string.format([[
 
 === s32 - riepilogo sessione (%d frame campionati) ===
-FPS medio:          %6.1f
 FPS di picco:       %6.1f
+FPS medio:          %6.1f
 FPS 1%% piu' bassi:  %6.1f   (peggiori %d frame)
 FPS peggiore:       %6.1f
 
@@ -272,7 +272,7 @@ CPU:  %.2f us/istruzione (%d istruzioni totali)
 PPU:  %.2f ms/frame medio
 GPU:  %.2f ms/frame medio (present/blit su HDMI)
 ]],
-        stats.n, stats.avg, stats.peak, stats.low1, stats.low1_n, stats.worst,
+        stats.n, stats.peak, stats.avg, stats.low1, stats.low1_n, stats.worst,
         instr > 0 and (cpu_s / instr * 1e6) or 0, instr,
         ppu_s / frames * 1000,
         present_s / frames * 1000))

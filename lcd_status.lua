@@ -149,10 +149,14 @@ end
 --   cpu_load_pct, temp_c, throttled
 -- } - tutti opzionali, una riga/valore viene disegnato solo se il
 -- relativo campo e' presente
+-- x dopo la fine della barra, dove disegnare un valore extra "in coda"
+-- alla riga (CPU%, temperatura, indicatore throttling - vedi sotto)
+local EXTRA_X = BAR_X + BAR_SEGMENTS * (SEGMENT_W + SEGMENT_GAP) + 10
+
 function LcdStatus:update(stats)
     ffi.copy(self.frame, self.bg, self.frame_bytes)
 
-    local n_rows = 6  -- 5 barre + 1 riga compatta di sistema (CPU%/temp/throttling)
+    local n_rows = 5
     local bar_h = LINE_HEIGHT * n_rows + SCALE * 4
     local bar_y = self.height - bar_h
     fill_rect(self.frame, self.width, self.height, 0, bar_y, self.width, bar_h, 10, 10, 14)
@@ -165,27 +169,46 @@ function LcdStatus:update(stats)
     -- su scale diverse la CPU sembrerebbe un collo di bottiglia quando
     -- in realta' e' trascurabile, es. 24us x ~85 istruzioni/frame =
     -- ~2ms, contro i 20-30ms di PPU/GPU). Stessa scala/soglia di
-    -- PPU/GPU per un confronto diretto a colpo d'occhio.
+    -- PPU/GPU per un confronto diretto a colpo d'occhio. In coda alla
+    -- barra: utilizzo CPU% (valore nudo, colorato per soglia).
     if stats.cpu_ms then
         local v = stats.cpu_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
         draw_stat_row(self.frame, w, h, y, string.format("CPU %.2fMS", v), v / 40, color)
+        if stats.cpu_load_pct then
+            local lv = stats.cpu_load_pct
+            local lcolor = lv < 70 and COLOR_GREEN or (lv < 90 and COLOR_ORANGE or COLOR_RED)
+            draw_text(self.frame, w, h, EXTRA_X, y, string.format("%.0f%%", lv), lcolor[1], lcolor[2], lcolor[3])
+        end
         y = y + LINE_HEIGHT
     end
 
-    -- PPU: scala 0-40ms, soglia 15ms
+    -- PPU: scala 0-40ms, soglia 15ms. In coda: temperatura CPU.
     if stats.ppu_ms then
         local v = stats.ppu_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
         draw_stat_row(self.frame, w, h, y, string.format("PPU %.2fMS", v), v / 40, color)
+        if stats.temp_c then
+            local tv = stats.temp_c
+            local tcolor = tv < 70 and COLOR_GREEN or (tv < 80 and COLOR_ORANGE or COLOR_RED)
+            draw_text(self.frame, w, h, EXTRA_X, y, string.format("%.0fC", tv), tcolor[1], tcolor[2], tcolor[3])
+        end
         y = y + LINE_HEIGHT
     end
 
-    -- GPU (present/blit su HDMI): scala 0-40ms, soglia 15ms
+    -- GPU (present/blit su HDMI): scala 0-40ms, soglia 15ms. In coda:
+    -- indicatore throttling/sottovoltaggio (quadratino verde/rosso,
+    -- non testo - niente vero sensore di consumo sul Pi senza hardware
+    -- aggiuntivo, vedi sysinfo.lua).
     if stats.present_ms then
         local v = stats.present_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
         draw_stat_row(self.frame, w, h, y, string.format("GPU %.2fMS", v), v / 40, color)
+        if stats.throttled then
+            local critical = stats.throttled.under_voltage_now or stats.throttled.throttled_now
+            local tcolor = critical and COLOR_RED or COLOR_GREEN
+            fill_rect(self.frame, w, h, EXTRA_X, y + 2, SEGMENT_H, SEGMENT_H, tcolor[1], tcolor[2], tcolor[3])
+        end
         y = y + LINE_HEIGHT
     end
 
@@ -204,35 +227,6 @@ function LcdStatus:update(stats)
         local v = stats.fps
         local color = v < 30 and COLOR_RED or (v < 60 and COLOR_ORANGE or COLOR_GREEN)
         draw_stat_row(self.frame, w, h, y, string.format("FPS %d", v), v / 60, color)
-        y = y + LINE_HEIGHT
-    end
-
-    -- riga compatta di sistema: solo valori nudi (nessuna etichetta),
-    -- colorati per criticita' - CPU%, temperatura, indicatore
-    -- throttling/sottovoltaggio (quadratino: verde ok, rosso critico -
-    -- niente vero sensore di consumo elettrico sul Pi senza hardware
-    -- aggiuntivo, vedi sysinfo.lua)
-    do
-        local x = SCALE * 2
-        if stats.cpu_load_pct then
-            local v = stats.cpu_load_pct
-            local color = v < 70 and COLOR_GREEN or (v < 90 and COLOR_ORANGE or COLOR_RED)
-            local text = string.format("%.0f%%", v)
-            draw_text(self.frame, w, h, x, y, text, color[1], color[2], color[3])
-            x = x + (#text + 2) * CHAR_ADVANCE
-        end
-        if stats.temp_c then
-            local v = stats.temp_c
-            local color = v < 70 and COLOR_GREEN or (v < 80 and COLOR_ORANGE or COLOR_RED)
-            local text = string.format("%.0fC", v)
-            draw_text(self.frame, w, h, x, y, text, color[1], color[2], color[3])
-            x = x + (#text + 2) * CHAR_ADVANCE
-        end
-        if stats.throttled then
-            local critical = stats.throttled.under_voltage_now or stats.throttled.throttled_now
-            local color = critical and COLOR_RED or COLOR_GREEN
-            fill_rect(self.frame, w, h, x, y, SEGMENT_H, SEGMENT_H, color[1], color[2], color[3])
-        end
     end
 
     local f = io.open(self.fb_path, "wb")
