@@ -61,6 +61,9 @@ local COLOR_DIM = { 30, 30, 36 }     -- valore testuale "mai successo" (es. UNDV
                                       -- confuso con lo sfondo della fascia ({10,10,14}),
                                       -- deliberatamente difficile da leggere: non deve
                                       -- attirare l'occhio quando non c'e' nessun problema
+local COLOR_BTN_ON = { 250, 210, 40 }  -- bottone del controller premuto ADESSO
+local COLOR_BTN_OFF = { 60, 60, 70 }   -- non premuto - visibile (a differenza di COLOR_DIM,
+                                        -- qui si vuole vedere sempre tutta la mappatura)
 
 -- -----------------------------------------------------------
 -- pacchettizzazione RGB565 (vedi nota in testa al file sull'ordine byte)
@@ -181,7 +184,11 @@ local EXTRA_X = BAR_X + BAR_SEGMENTS * (SEGMENT_W + SEGMENT_GAP) + 10
 function LcdStatus:update(stats)
     ffi.copy(self.frame, self.bg, self.frame_bytes)
 
-    local n_rows = 5
+    -- SEMPRE 6 righe (non 5+1 condizionale): l'altezza della fascia
+    -- deve restare fissa a runtime, altrimenti la scrittura parziale
+    -- (vedi fondo funzione) manderebbe al device la porzione sbagliata
+    -- se un controller si collega/scollega a meta' sessione
+    local n_rows = 6
     local bar_h = LINE_HEIGHT * n_rows + SCALE * 4
     local bar_y = self.height - bar_h
     fill_rect(self.frame, self.width, self.height, 0, bar_y, self.width, bar_h, 10, 10, 14)
@@ -256,6 +263,27 @@ function LcdStatus:update(stats)
             local ever_critical = stats.throttled.under_voltage_ever or stats.throttled.throttled_ever
             local tcolor = now_critical and COLOR_RED or (ever_critical and COLOR_ORANGE or COLOR_DIM)
             draw_text(self.frame, w, h, EXTRA_X, y, "UNDV", tcolor[1], tcolor[2], tcolor[3])
+        end
+        y = y + LINE_HEIGHT
+    end
+
+    -- controller: un simbolo per bottone, acceso (giallo) se premuto in
+    -- questo istante o in qualunque momento dall'ultimo aggiornamento
+    -- del pannello (vedi main.lua "held_since_update" - l'LCD si
+    -- aggiorna ogni 2s, una pressione breve fra un aggiornamento e
+    -- l'altro andrebbe altrimenti persa), spento (grigio) altrimenti.
+    -- Riga sempre disegnata (vedi n_rows sopra) - se nessun controller
+    -- e' collegato resta vuota, non sparisce.
+    if stats.controller then
+        local c = stats.controller
+        local x = SCALE * 2
+        local order = { "^", "v", "<", ">", "x", "o", "square", "triangle", "l1", "r1" }
+        local labels = { x = "X", o = "O", square = "S", triangle = "T", l1 = "L1", r1 = "R1" }
+        for _, key in ipairs(order) do
+            local text = labels[key] or key  -- "^","v","<",">" sono gia' il glifo stesso
+            local color = c[key] and COLOR_BTN_ON or COLOR_BTN_OFF
+            draw_text(self.frame, w, h, x, y, text, color[1], color[2], color[3])
+            x = x + #text * CHAR_ADVANCE + SCALE * 3
         end
     end
 

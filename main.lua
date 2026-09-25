@@ -16,12 +16,14 @@ Uso (sul target reale, Raspberry Pi con KMSDRM):
 ESC per uscire.
 ]]
 local ffi = require("ffi")
+local bit = require("bit")
 local mm = require("memory_map")
 local cpu_module = require("cpu")
 local assembler = require("assembler")
 local ppu = require("ppu")
 local video = require("video")
 local input = require("input")
+local apu_module = require("apu")
 
 local SCREEN_W, SCREEN_H = 320, 224  -- modalita' 4:3, vedi docs/design.md
 local CART_LOAD_ADDR = 0x1000
@@ -29,6 +31,11 @@ local TICK_DT = 1 / 60
 local MAX_CATCHUP_TICKS = 5  -- stesso principio del vecchio motore:
                                -- se il rendering e' stato lento, recupera
                                -- un po' di tick ma non tutti in un colpo
+
+local APU_SAMPLE_RATE = 22050
+local SFX_CHANNEL = 7  -- canale APU dedicato agli effetti del demo (bottone
+                         -- X) - il canale 0 resta libero per un'eventuale
+                         -- musica, non ha senso condividerlo con gli SFX
 
 ffi.cdef[[
 typedef struct { long tv_sec; long tv_nsec; } timespec_t;
@@ -286,9 +293,37 @@ local function main()
 
     local v = video.new("s32 - demo", SCREEN_W, SCREEN_H, false)
 
+    -- audio: l'APU gira sempre (e' solo matematica, nessuna dipendenza
+    -- hardware), l'uscita SDL2 invece puo' non essere disponibile
+    -- (nessuna scheda audio, ambiente di test headless...) - senza
+    -- bloccare l'avvio del gioco per questo, si continua muti
+    local apu = apu_module.new(APU_SAMPLE_RATE)
+    local audio_ok, audio_out_or_err = pcall(function()
+        return require("audio_out").new(APU_SAMPLE_RATE)
+    end)
+    local audio_out = audio_ok and audio_out_or_err or nil
+    if not audio_ok then
+        print("s32: uscita audio non disponibile (" .. tostring(audio_out_or_err) .. ") - si continua senza suono")
+    end
+    local audio_sample_accum = 0  -- accumulatore frazionario: 22050/60 non e' intero,
+                                    -- senza questo l'audio andrebbe lentamente fuori sync
+
+    local prev_action = false  -- per rilevare il fronte di salita/discesa del
+                                 -- tasto azione (X/Cross/spazio) - un GATE va
+                                 -- acceso/spento una volta sola, non ad ogni tick
+                                 -- in cui il tasto resta premuto
+
     local lcd_panel, sysinfo = nil, nil
     local cpu_load_state, throttled_info, throttled_timer = nil, nil, 0
     local THROTTLED_CHECK_INTERVAL = 10.0  -- vcgencmd e' un sottoprocesso, va chiamato di rado
+    -- stato controller "premuto da almeno un tick dall'ultimo
+    -- aggiornamento LCD" - il pannello si aggiorna ogni 2s
+    -- (LCD_UPDATE_INTERVAL), una pressione piu' breve andrebbe altrimenti
+    -- persa se si guardasse solo lo stato ESATTO nel singolo istante
+    -- dell'aggiornamento. Fatto OR ad ogni tick, azzerato dopo ogni
+    -- lettura da parte del pannello.
+    local controller_held = { up=false, down=false, left=false, right=false,
+        x=false, o=false, square=false, triangle=false, l1=false, r1=false }
     if lcd_status_enabled() then
         local lcd_status = require("lcd_status")
         sysinfo = require("sysinfo")
@@ -343,11 +378,64 @@ local function main()
             -- resto del frame.
             if input.poll() then running = false end
             if input.menu_button_pressed() then running = false end
-            local steps = cpu:run(CART_LOAD_ADDR, input.input_byte())
+            local input_byte = input.input_byte()
+            local steps = cpu:run(CART_LOAD_ADDR, input_byte)
             lcd_instr = lcd_instr + steps
             session_instr = session_instr + steps
+
+            -- suono: fronte di salita/discesa del bit azione
+            -- (X/Cross/spazio) sul canale SFX dedicato - GATE acceso
+            -- quando si preme, spento (parte il rilascio ADSR) quando
+            -- si rilascia. Registri APU = memoria normale, una STA
+            -- diretta basterebbe da un programma cartuccia vero -
+            -- qui scriviamo a mano perche' il demo non ha ancora
+            -- istruzioni dedicate al suono.
+            local action = bit.band(input_byte, 0x10) ~= 0
+            if action ~= prev_action then
+                local reg = mm.APU_BASE + SFX_CHANNEL * mm.APU_CHANNEL_BYTES
+                if action then
+                    cpu.mem[reg + mm.APU_REG_FREQ_LO] = 880 % 256
+                    cpu.mem[reg + mm.APU_REG_FREQ_HI] = math.floor(880 / 256)
+                    cpu.mem[reg + mm.APU_REG_WAVEFORM] = mm.APU_WAVEFORM_SQUARE
+                    cpu.mem[reg + mm.APU_REG_DUTY] = 128
+                    cpu.mem[reg + mm.APU_REG_VOLUME] = 200
+                    cpu.mem[reg + mm.APU_REG_ATTACK] = 2
+                    cpu.mem[reg + mm.APU_REG_DECAY] = 20
+                    cpu.mem[reg + mm.APU_REG_SUSTAIN] = 180
+                    cpu.mem[reg + mm.APU_REG_RELEASE] = 30
+                end
+                cpu.mem[reg + mm.APU_REG_CONTROL] = action and mm.APU_CONTROL_GATE or 0
+                prev_action = action
+            end
+
+            -- accumula "premuto da almeno un tick dall'ultimo
+            -- aggiornamento LCD" (vedi dichiarazione di controller_held)
+            local cs = input.controller_button_state()
+            if cs then
+                for k in pairs(controller_held) do
+                    if cs[k] then controller_held[k] = true end
+                end
+            end
+
             accumulator = accumulator - TICK_DT
             ticks = ticks + 1
+        end
+
+        -- genera e accoda l'audio di questo blocco di tick - fatto una
+        -- volta per frame renderizzato (non per tick) per limitare il
+        -- numero di chiamate a SDL_QueueAudio, ma la QUANTITA' di
+        -- campioni generati segue il tempo REALE trascorso (frame_time),
+        -- non il framerate di rendering - cosi' l'audio resta a tempo
+        -- anche se il video rallenta. Accumulatore frazionario perche'
+        -- 22050Hz/60fps non e' un numero intero di campioni a tick.
+        if audio_out then
+            audio_sample_accum = audio_sample_accum + frame_time * APU_SAMPLE_RATE
+            local n = math.floor(audio_sample_accum)
+            if n > 0 then
+                audio_sample_accum = audio_sample_accum - n
+                local sbuf = apu:generate(cpu.mem, n)
+                audio_out:queue(sbuf, n)
+            end
         end
         local dt_cpu = now() - t_cpu
         lcd_cpu_s = lcd_cpu_s + dt_cpu
@@ -396,7 +484,9 @@ local function main()
                 cpu_load_pct = cpu_load_pct,
                 temp_c = sysinfo.read_temp_c(),
                 throttled = throttled_info,
+                controller = input.controller_connected() and controller_held or nil,
             })
+            for k in pairs(controller_held) do controller_held[k] = false end
             lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
         end
 
@@ -406,6 +496,7 @@ local function main()
 
     print_session_summary(session_frame_times, session_cpu_s, session_ppu_s, session_present_s,
         session_instr, session_frames)
+    if audio_out then audio_out:close() end
     v:close()
 end
 

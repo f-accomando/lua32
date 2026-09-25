@@ -64,8 +64,13 @@ local BTN_DPAD_UP = 11
 local BTN_DPAD_DOWN = 12
 local BTN_DPAD_LEFT = 13
 local BTN_DPAD_RIGHT = 14
-local BTN_A = 0       -- Cross su PS4, A su Xbox - il "conferma/azione" universale
-local BTN_START = 6   -- Options su PS4 - usato come pulsante menu
+local BTN_A = 0        -- Cross su PS4, A su Xbox - il "conferma/azione" universale
+local BTN_B = 1        -- Circle su PS4
+local BTN_X = 2        -- Square su PS4 (occhio: "X" di SDL e "X" fisico su PS4 NON coincidono)
+local BTN_Y = 3        -- Triangle su PS4
+local BTN_START = 6    -- Options su PS4 - usato come pulsante menu
+local BTN_LEFTSHOULDER = 9
+local BTN_RIGHTSHOULDER = 10
 
 -- scancode SDL (SDL_SCANCODE_*, layout indipendenti - non i keycode,
 -- verificati contro SDL_scancode.h)
@@ -104,6 +109,31 @@ local function try_open_first_controller()
     end
 end
 try_open_first_controller()  -- se e' gia' collegato all'avvio
+
+-- controller_button_state(): stato di TUTTI i bottoni interessanti,
+-- non solo i 5 gia' collassati in input_byte() - serve per
+-- visualizzare cosa viene premuto (vedi lcd_status.lua "controller").
+-- Etichette per il simbolo FISICO stampato sul pad PS4 (X/O/S/T), non
+-- per il nome astratto di SDL - occhio: SDL_CONTROLLER_BUTTON_X (2)
+-- e' il tasto Square su PS4, NON il simbolo "X" (quello e' BUTTON_A) -
+-- una collisione di nomi facile da sbagliare, vedi commenti sopra.
+-- Ritorna nil se nessun controller e' collegato.
+function M.controller_button_state()
+    if not controller then return nil end
+    local g = sdl.SDL_GameControllerGetButton
+    return {
+        up = g(controller, BTN_DPAD_UP) ~= 0,
+        down = g(controller, BTN_DPAD_DOWN) ~= 0,
+        left = g(controller, BTN_DPAD_LEFT) ~= 0,
+        right = g(controller, BTN_DPAD_RIGHT) ~= 0,
+        x = g(controller, BTN_A) ~= 0,       -- Cross
+        o = g(controller, BTN_B) ~= 0,       -- Circle
+        square = g(controller, BTN_X) ~= 0,  -- Square (SDL "X" fisico diverso!)
+        triangle = g(controller, BTN_Y) ~= 0,
+        l1 = g(controller, BTN_LEFTSHOULDER) ~= 0,
+        r1 = g(controller, BTN_RIGHTSHOULDER) ~= 0,
+    }
+end
 
 -- event_buf: buffer grezzo riusato ad ogni chiamata di poll() - evita
 -- di allocare un nuovo cdata a ogni evento (potenzialmente molti per
