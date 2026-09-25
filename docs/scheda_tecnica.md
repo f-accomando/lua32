@@ -124,7 +124,8 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 | Caratteristica | Valore |
 |---|---|
 | Tastiera | SDL2 diretto (`SDL_GetKeyboardState`) — finestra reale con focus reale, nessun bypass necessario |
-| Mappatura base | Su/giù/sinistra/destra + azione (estendibile) |
+| Controller | SDL_GameController — riconosce PS4/PS5/Xbox e altri automaticamente (SDL li normalizza tutti allo stesso layout astratto), collegamento a caldo supportato |
+| Mappatura base | Su/giù/sinistra/destra + azione (estendibile) — tastiera e controller in OR, indifferente quale si usi |
 | Multiplayer locale | Fino a 8 porte input separate nella mappa di memoria |
 | Implementazione | `input.lua`, FFI diretto, costanti verificate contro l'header SDL2 reale |
 
