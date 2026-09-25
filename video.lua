@@ -40,6 +40,8 @@ void SDL_RenderPresent(SDL_Renderer *renderer);
 SDL_Texture *SDL_CreateTexture(SDL_Renderer *renderer, uint32_t format, int access, int w, int h);
 void SDL_DestroyTexture(SDL_Texture *texture);
 int SDL_UpdateTexture(SDL_Texture *texture, const void *rect, const void *pixels, int pitch);
+
+int SDL_ShowCursor(int toggle);
 ]]
 
 -- SDL2 non e' gia' linkata nel processo (a differenza delle funzioni
@@ -62,6 +64,8 @@ local SDL_PIXELFORMAT_RGB24 = 0x17101803  -- ARRAYU8/RGB/24bit/3byte -
                                             -- stesso ordine byte del
                                             -- buffer che produce
                                             -- ppu.render_frame()
+local SDL_DISABLE = 0  -- per SDL_ShowCursor: valore da SDL_events.h,
+                        -- non specifico di KMSDRM/accelerazione
 
 local M = {}
 
@@ -81,6 +85,10 @@ function M.new(title, native_w, native_h, fullscreen, renderer_flags)
     if sdl.SDL_Init(SDL_INIT_VIDEO) ~= 0 then
         error("SDL_Init fallita: " .. ffi.string(sdl.SDL_GetError()))
     end
+    sdl.SDL_ShowCursor(SDL_DISABLE)  -- niente cursore del mouse su una
+                                      -- console senza mouse (visibile
+                                      -- di default, SDL non lo nasconde
+                                      -- da solo sotto KMSDRM)
 
     local window_flags = SDL_WINDOW_SHOWN
     if fullscreen then
