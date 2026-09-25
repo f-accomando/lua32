@@ -292,8 +292,13 @@ local function main()
     if lcd_status_enabled() then
         local lcd_status = require("lcd_status")
         sysinfo = require("sysinfo")
+        -- l'indice /dev/fbN dell'LCD non e' stabile (vedi sysinfo.lua
+        -- find_lcd_fb) - lo si cerca a runtime invece di assumere fb0,
+        -- a meno che S32_LCD_FB non lo forzi esplicitamente
+        local fb_path = os.getenv("S32_LCD_FB") or sysinfo.find_lcd_fb() or "/dev/fb0"
+        print("s32: pannello LCD su " .. fb_path)
         lcd_panel = lcd_status.new(
-            os.getenv("S32_LCD_FB") or "/dev/fb0",
+            fb_path,
             os.getenv("S32_LCD_BG") or "shinchan_565.bin",
             480, 320)
     end

@@ -91,4 +91,32 @@ function M.read_throttled()
     }
 end
 
+-- -----------------------------------------------------------
+-- trova il framebuffer del pannello LCD scandendo
+-- /sys/class/graphics/fbN/name - l'indice N NON e' stabile fra un
+-- boot/riavvio e l'altro (dipende dall'ordine con cui i driver si
+-- registrano), soprattutto ora che anche l'HDMI puo' comparire come
+-- framebuffer emulato via DRM (vc4drmfb). Visto succedere davvero:
+-- dopo uno scollegamento/ricollegamento a freddo dell'LCD, /dev/fb0 e'
+-- diventato l'HDMI e l'LCD e' slittato su un altro indice - scrivere
+-- /dev/fb0 fisso in quel momento manda i dati sul device sbagliato,
+-- silenziosamente (nessun errore: vedi nota in video.lua/main.lua).
+-- Ritorna nil se non trova nulla che corrisponda (fallback a
+-- /dev/fb0 lasciato al chiamante, non qui).
+-- -----------------------------------------------------------
+function M.find_lcd_fb(name_pattern)
+    name_pattern = (name_pattern or "ili9486"):lower()
+    for i = 0, 7 do
+        local f = io.open("/sys/class/graphics/fb" .. i .. "/name", "r")
+        if f then
+            local name = f:read("*l")
+            f:close()
+            if name and name:lower():find(name_pattern, 1, true) then
+                return "/dev/fb" .. i
+            end
+        end
+    end
+    return nil
+end
+
 return M
