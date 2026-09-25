@@ -181,7 +181,7 @@ local EXTRA_X = BAR_X + BAR_SEGMENTS * (SEGMENT_W + SEGMENT_GAP) + 10
 function LcdStatus:update(stats)
     ffi.copy(self.frame, self.bg, self.frame_bytes)
 
-    local n_rows = 5
+    local n_rows = 6
     local bar_h = LINE_HEIGHT * n_rows + SCALE * 4
     local bar_y = self.height - bar_h
     fill_rect(self.frame, self.width, self.height, 0, bar_y, self.width, bar_h, 10, 10, 14)
@@ -226,6 +226,16 @@ function LcdStatus:update(stats)
         local v = stats.present_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
         draw_stat_row(self.frame, w, h, y, string.format("GPU %.2fMS", v), v / 40, color, self.peak_fraction, "gpu")
+        y = y + LINE_HEIGHT
+    end
+
+    -- APU (sintesi audio, apu:generate()+accodamento): stessa scala/
+    -- soglia di CPU/PPU/GPU per confronto diretto - mai misurato su Pi
+    -- prima d'ora, vedi commento in main.lua.
+    if stats.apu_ms then
+        local v = stats.apu_ms
+        local color = v < 15 and COLOR_GREEN or COLOR_RED
+        draw_stat_row(self.frame, w, h, y, string.format("APU %.2fMS", v), v / 40, color, self.peak_fraction, "apu")
         y = y + LINE_HEIGHT
     end
 
@@ -294,7 +304,7 @@ if arg and arg[0] and arg[0]:match("lcd_status%.lua$") then
     local bg_path = arg[2] or "shinchan_565.bin"
     local panel = M.new(fb_path, bg_path, 480, 320)
     panel:update({
-        cpu_ms = 2.1, ppu_ms = 35.92, present_ms = 21.24,
+        cpu_ms = 2.1, ppu_ms = 35.92, present_ms = 21.24, apu_ms = 1.5,
         vram_pct = 14, gfx_bank = 0, stage = 0, fps = 16,
         cpu_load_pct = 62, temp_c = 71, throttled = { under_voltage_now = true, throttled_now = false },
     })

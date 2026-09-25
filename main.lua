@@ -264,7 +264,7 @@ local function compute_fps_stats(frame_times_s)
     }
 end
 
-local function print_session_summary(frame_times_s, cpu_s, ppu_s, present_s, instr, frames)
+local function print_session_summary(frame_times_s, cpu_s, ppu_s, present_s, apu_s, instr, frames)
     local stats = compute_fps_stats(frame_times_s)
     if not stats then return end
     print(string.format([[
@@ -278,11 +278,13 @@ FPS peggiore:       %6.1f
 CPU:  %.2f us/istruzione (%d istruzioni totali)
 PPU:  %.2f ms/frame medio
 GPU:  %.2f ms/frame medio (present/blit su HDMI)
+APU:  %.2f ms/frame medio (sintesi + accodamento audio)
 ]],
         stats.n, stats.peak, stats.avg, stats.low1, stats.low1_n, stats.worst,
         instr > 0 and (cpu_s / instr * 1e6) or 0, instr,
         ppu_s / frames * 1000,
-        present_s / frames * 1000))
+        present_s / frames * 1000,
+        apu_s / frames * 1000))
 end
 
 local function main()
@@ -335,13 +337,13 @@ local function main()
     -- invece di aspettare LCD_UPDATE_INTERVAL secondi a vuoto - senza
     -- questo il pannello resta "spento" per i primi 2s dopo l'avvio,
     -- facile da scambiare per un bug quando in realta' e' solo un'attesa.
-    local lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = LCD_UPDATE_INTERVAL, 0, 0, 0, 0, 0
+    local lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_apu_s, lcd_frames = LCD_UPDATE_INTERVAL, 0, 0, 0, 0, 0, 0
 
     -- accumulatori per l'intera sessione (non si azzerano mai, a
     -- differenza di quelli sopra che alimentano l'LCD ogni 0.5s) - per
     -- il riepilogo finale su stdout, vedi print_session_summary
     local session_frame_times = {}
-    local session_cpu_s, session_ppu_s, session_present_s, session_instr, session_frames = 0, 0, 0, 0, 0
+    local session_cpu_s, session_ppu_s, session_present_s, session_apu_s, session_instr, session_frames = 0, 0, 0, 0, 0, 0
     local session_elapsed_s = 0
 
     local running = true
@@ -403,6 +405,9 @@ local function main()
             accumulator = accumulator - TICK_DT
             ticks = ticks + 1
         end
+        local dt_cpu = now() - t_cpu
+        lcd_cpu_s = lcd_cpu_s + dt_cpu
+        session_cpu_s = session_cpu_s + dt_cpu
 
         -- genera e accoda l'audio di questo blocco di tick - fatto una
         -- volta per frame renderizzato (non per tick) per limitare il
@@ -411,6 +416,12 @@ local function main()
         -- non il framerate di rendering - cosi' l'audio resta a tempo
         -- anche se il video rallenta. Accumulatore frazionario perche'
         -- 22050Hz/60fps non e' un numero intero di campioni a tick.
+        -- Cronometrato PER CONTO SUO (non dentro dt_cpu sopra: prima ci
+        -- finiva per sbaglio, facendo sembrare la CPU molto piu' lenta
+        -- di quanto sia davvero - mai misurato il costo vero
+        -- dell'audio su Pi finora, solo assunto "trascurabile" dalla
+        -- sandbox, esattamente l'errore gia' fatto una volta con la PPU).
+        local t_apu = now()
         if audio_out then
             audio_sample_accum = audio_sample_accum + frame_time * APU_SAMPLE_RATE
             local n = math.floor(audio_sample_accum)
@@ -420,9 +431,9 @@ local function main()
                 audio_out:queue(sbuf, n)
             end
         end
-        local dt_cpu = now() - t_cpu
-        lcd_cpu_s = lcd_cpu_s + dt_cpu
-        session_cpu_s = session_cpu_s + dt_cpu
+        local dt_apu = now() - t_apu
+        lcd_apu_s = lcd_apu_s + dt_apu
+        session_apu_s = session_apu_s + dt_apu
 
         local t_ppu = now()
         local buf = ppu.render_frame(cpu.mem, 0, 0, SCREEN_W, SCREEN_H)
@@ -460,6 +471,7 @@ local function main()
                 cpu_ms = lcd_cpu_s / lcd_frames * 1000,
                 ppu_ms = lcd_ppu_s / lcd_frames * 1000,
                 present_ms = lcd_present_s / lcd_frames * 1000,
+                apu_ms = lcd_apu_s / lcd_frames * 1000,
                 vram_pct = ppu.get_vram_usage_pct(cpu.mem),
                 gfx_bank = cpu.current_gfx_bank,
                 stage = cpu.current_stage,
@@ -468,7 +480,7 @@ local function main()
                 temp_c = sysinfo.read_temp_c(),
                 throttled = throttled_info,
             })
-            lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
+            lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_apu_s, lcd_frames = 0, 0, 0, 0, 0, 0, 0
         end
 
         local elapsed = now() - t
@@ -476,7 +488,7 @@ local function main()
     end
 
     print_session_summary(session_frame_times, session_cpu_s, session_ppu_s, session_present_s,
-        session_instr, session_frames)
+        session_apu_s, session_instr, session_frames)
     if audio_out then audio_out:close() end
     v:close()
 end
