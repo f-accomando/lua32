@@ -43,11 +43,10 @@ int SDL_UpdateTexture(SDL_Texture *texture, const void *rect, const void *pixels
 ]]
 
 -- SDL2 non e' gia' linkata nel processo (a differenza delle funzioni
--- della libc, sempre in ffi.C) - va caricata esplicitamente. "SDL2"
--- basta su Linux (cerca libSDL2.so); nomi diversi per altre
--- piattaforme non sono un problema per ora (solo Linux/Raspberry Pi
--- e' il target).
-local sdl = ffi.load("SDL2")
+-- della libc, sempre in ffi.C) - va caricata esplicitamente. Vedi
+-- sdl_load.lua per il perche' non basta ffi.load("SDL2") sul target
+-- reale (solo pacchetto runtime, niente -dev).
+local sdl = require("sdl_load")
 
 -- valori verificati con un probe in C contro SDL2/SDL.h vero (vedi
 -- docstring sopra) - MAI dedotti a mano dalla sola documentazione,

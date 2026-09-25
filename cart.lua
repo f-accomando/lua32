@@ -34,10 +34,20 @@ M.MAGIC = "S32CART1"
 M.VERSION = 1
 
 -- -----------------------------------------------------------
--- header binario, packed (nessun padding fra i campi)
+-- header binario. NIENTE __attribute__((packed)): un campo a 32 bit
+-- su un offset non allineato a 4 byte va in SIGBUS reale su ARMv6
+-- (Raspberry Pi 1) - su x86 (sandbox) l'accesso non allineato e'
+-- tollerato in hardware e il bug resta invisibile finche' non si
+-- prova su hardware vero (successo esattamente questo). Lasciando lo
+-- struct NON packed, il compilatore/ABI inserisce il padding giusto
+-- per allineare ogni campo da solo, su qualunque architettura -
+-- M.HEADER_SIZE e' gia' calcolato con ffi.sizeof() (non un numero
+-- fisso), quindi il file su disco resta comunque autoconsistente sia
+-- che l'header risulti 256 byte sia qualche byte in piu' per il
+-- padding.
 -- -----------------------------------------------------------
 ffi.cdef[[
-typedef struct __attribute__((packed)) {
+typedef struct {
     char     magic[8];
     uint8_t  version;
     uint8_t  reserved0[3];
@@ -61,7 +71,7 @@ typedef struct __attribute__((packed)) {
 } s32_cart_header_t;
 ]]
 local header_t = ffi.typeof("s32_cart_header_t")
-M.HEADER_SIZE = ffi.sizeof(header_t)  -- 256 byte esatti
+M.HEADER_SIZE = ffi.sizeof(header_t)  -- calcolato, non piu' un numero fisso (vedi sopra)
 
 local STAGE_BANK_SIZE = mm.TILEMAP_BYTES
 local GFX_BANK_SIZE = mm.DIRECTORY_BYTES + mm.GRAPHICS_POOL_BYTES

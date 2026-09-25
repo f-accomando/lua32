@@ -30,7 +30,7 @@ int SDL_PushEvent(void *event);
 const uint8_t *SDL_GetKeyboardState(int *numkeys);
 ]]
 
-local sdl = ffi.load("SDL2")
+local sdl = require("sdl_load")
 
 -- SDL_QUIT: valore verificato contro SDL_events.h (SDL_QUIT = 0x100,
 -- primo evento della categoria "application events")
