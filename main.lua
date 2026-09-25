@@ -209,6 +209,65 @@ local function lcd_status_enabled()
     return os.getenv("S32_LCD_STATUS") == "1"
 end
 
+-- riepilogo di sessione, stampato su stdout all'uscita (ESC/quit) cosi'
+-- si puo' copiare/incollare da SSH senza dover leggere l'LCD a voce -
+-- picco/media/1% low/0.01% low sono le metriche standard per misurare
+-- gli scatti (stutter), non solo il framerate medio: un frame pessimo
+-- ogni tanto puo' sparire nella media ma si sente giocando.
+local function avg_of(list, from, to)
+    from = from or 1; to = to or #list
+    local sum = 0
+    for i = from, to do sum = sum + list[i] end
+    return sum / (to - from + 1)
+end
+
+local function compute_fps_stats(frame_times_s)
+    local n = #frame_times_s
+    if n == 0 then return nil end
+    local fps = {}
+    for i = 1, n do fps[i] = 1 / frame_times_s[i] end
+    table.sort(fps)  -- crescente: i peggiori (fps piu' basso) all'inizio
+
+    local function low_pct(p)
+        local k = math.max(1, math.floor(n * p + 0.5))
+        return avg_of(fps, 1, k), k
+    end
+    local low1, low1_n = low_pct(0.01)
+    local low001, low001_n = low_pct(0.0001)
+
+    return {
+        n = n,
+        avg = avg_of(fps),
+        peak = fps[n],
+        worst = fps[1],
+        low1 = low1, low1_n = low1_n,
+        low001 = low001, low001_n = low001_n,
+    }
+end
+
+local function print_session_summary(frame_times_s, cpu_s, ppu_s, present_s, instr, frames)
+    local stats = compute_fps_stats(frame_times_s)
+    if not stats then return end
+    print(string.format([[
+
+=== s32 - riepilogo sessione (%d frame campionati) ===
+FPS medio:      %6.1f
+FPS di picco:   %6.1f
+FPS peggiore:   %6.1f
+1%% low:         %6.1f   (peggiori %d frame)
+0.01%% low:      %6.1f   (peggiori %d frame)
+
+CPU:  %.2f us/istruzione (%d istruzioni totali)
+PPU:  %.2f ms/frame medio
+GPU:  %.2f ms/frame medio (present/blit su HDMI)
+]],
+        stats.n, stats.avg, stats.peak, stats.worst,
+        stats.low1, stats.low1_n, stats.low001, stats.low001_n,
+        instr > 0 and (cpu_s / instr * 1e6) or 0, instr,
+        ppu_s / frames * 1000,
+        present_s / frames * 1000))
+end
+
 local function main()
     local cpu = cpu_module.new()
     local oam_base = setup_demo_assets(cpu)
@@ -227,13 +286,20 @@ local function main()
     end
     local lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
 
+    -- accumulatori per l'intera sessione (non si azzerano mai, a
+    -- differenza di quelli sopra che alimentano l'LCD ogni 0.5s) - per
+    -- il riepilogo finale su stdout, vedi print_session_summary
+    local session_frame_times = {}
+    local session_cpu_s, session_ppu_s, session_present_s, session_instr, session_frames = 0, 0, 0, 0, 0
+
     local running = true
     local accumulator = 0
     local last_time = now()
 
     while running do
         local t = now()
-        local frame_time = math.min(t - last_time, TICK_DT * MAX_CATCHUP_TICKS)
+        local raw_elapsed = t - last_time  -- non clampato: per le statistiche serve il dato vero, non quello limitato per l'accumulatore
+        local frame_time = math.min(raw_elapsed, TICK_DT * MAX_CATCHUP_TICKS)
         last_time = t
         accumulator = accumulator + frame_time
 
@@ -252,22 +318,32 @@ local function main()
             -- resto del frame.
             if input.poll() then running = false end
             if input.menu_button_pressed() then running = false end
-            lcd_instr = lcd_instr + cpu:run(CART_LOAD_ADDR, input.input_byte())
+            local steps = cpu:run(CART_LOAD_ADDR, input.input_byte())
+            lcd_instr = lcd_instr + steps
+            session_instr = session_instr + steps
             accumulator = accumulator - TICK_DT
             ticks = ticks + 1
         end
-        lcd_cpu_s = lcd_cpu_s + (now() - t_cpu)
+        local dt_cpu = now() - t_cpu
+        lcd_cpu_s = lcd_cpu_s + dt_cpu
+        session_cpu_s = session_cpu_s + dt_cpu
 
         local t_ppu = now()
         local buf = ppu.render_frame(cpu.mem, 0, 0, SCREEN_W, SCREEN_H)
-        lcd_ppu_s = lcd_ppu_s + (now() - t_ppu)
+        local dt_ppu = now() - t_ppu
+        lcd_ppu_s = lcd_ppu_s + dt_ppu
+        session_ppu_s = session_ppu_s + dt_ppu
 
         local t_present = now()
         v:present(buf)
-        lcd_present_s = lcd_present_s + (now() - t_present)
+        local dt_present = now() - t_present
+        lcd_present_s = lcd_present_s + dt_present
+        session_present_s = session_present_s + dt_present
 
         lcd_frames = lcd_frames + 1
         lcd_timer = lcd_timer + frame_time
+        session_frames = session_frames + 1
+        session_frame_times[#session_frame_times + 1] = raw_elapsed
         if lcd_panel and lcd_timer >= LCD_UPDATE_INTERVAL then
             lcd_panel:update({
                 cpu_us_per_instr = lcd_instr > 0 and (lcd_cpu_s / lcd_instr * 1e6) or nil,
@@ -285,6 +361,8 @@ local function main()
         sleep(TICK_DT - elapsed)
     end
 
+    print_session_summary(session_frame_times, session_cpu_s, session_ppu_s, session_present_s,
+        session_instr, session_frames)
     v:close()
 end
 
