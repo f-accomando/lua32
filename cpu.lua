@@ -38,7 +38,6 @@ local PORT_INPUT = mm.PORT_INPUT
 local PORT_STAGE_SELECT = mm.PORT_STAGE_SELECT
 local PORT_SCROLL_X = mm.PORT_SCROLL_X
 local PORT_SCROLL_Y = mm.PORT_SCROLL_Y
-local PORT_SOUND = mm.PORT_SOUND
 local PORT_GFX_BANK_SELECT = mm.PORT_GFX_BANK_SELECT
 
 local IS_INPUT_PORT = {[PORT_INPUT] = true}
@@ -62,8 +61,6 @@ function M.new()
     self.gfx_banks = {}     -- popolato dall'host - vedi PORT_GFX_BANK_SELECT
     self.current_gfx_bank = 0
     self.scroll_x, self.scroll_y = 0, 0
-    self.sound_queue = {}   -- ID suoni richiesti in questo frame - il
-                              -- motore la svuota dopo ogni run()
     return self
 end
 
@@ -98,7 +95,11 @@ function CPU:write16(addr, value)
     end
     if addr == PORT_SCROLL_X then self.scroll_x = value; return end
     if addr == PORT_SCROLL_Y then self.scroll_y = value; return end
-    if addr == PORT_SOUND then self.sound_queue[#self.sound_queue + 1] = value; return end
+    -- i registri APU (vedi memory_map.lua/apu.lua) sono memoria normale:
+    -- l'APU li legge per conto suo ad ogni generate_samples(), nessun
+    -- effetto collaterale da gestire qui (a differenza di STAGE_SELECT/
+    -- GFX_BANK_SELECT, che copiano dati subito) - una STA qualsiasi,
+    -- anche indicizzata (comodo: X = numero_canale * 16), basta.
     self.mem[addr] = bit.band(value, 0xff)
     self.mem[bit.band(addr + 1, ADDRESS_MASK)] = bit.band(bit.rshift(value, 8), 0xff)
 end

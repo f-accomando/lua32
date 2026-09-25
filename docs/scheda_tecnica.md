@@ -40,7 +40,8 @@ Misurato su Raspberry Pi 1 vero (ARMv6): **3.72 µs/istruzione** (LuaJIT) contro
 | OAM | `0x0AA000` | 4 KB | 512 sprite × 8 byte |
 | CGRAM | `0x0AB000` | 6 KB | 8 palette × 256 colori × 3 byte |
 | Porte | `0x0AC800` | 256 B | I/O memory-mapped |
-| Libero | `0x0AC900` | ~15,3 MB | Non assegnato — riservato per estensioni (formato cartuccia con banchi, eventuali coprocessori) |
+| APU | `0x0AC900` | 128 B | 8 canali × 16 byte, vedi sezione Audio |
+| Libero | `0x0AC980` | ~15,3 MB | Non assegnato — riservato per estensioni (formato cartuccia con banchi, eventuali coprocessori) |
 
 ### VRAM in dettaglio
 
@@ -59,7 +60,7 @@ Misurato su Raspberry Pi 1 vero (ARMv6): **3.72 µs/istruzione** (LuaJIT) contro
 | INPUT | +0 | Input giocatore 1 |
 | STAGE_SELECT | +1 | Scrivere un numero copia la tilemap di quello stage in VRAM |
 | SCROLL_X / SCROLL_Y | +2 / +3 | Registri di scroll dello sfondo |
-| SOUND | +4 | Accoda un ID suono (APU, non ancora implementata) |
+| (libera) | +4 | Era SOUND (accoda un ID) — superata dal controllo esplicito per canale dell'APU, vedi sotto |
 | GFX_BANK_SELECT | +5 | Scrivere un numero copia directory+archivio grafico di quel banco in VRAM (formato cartuccia, vedi sotto) |
 | INPUT giocatore 2-8 | +0x10…+0x16 | Multiplayer locale |
 
@@ -87,15 +88,21 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 
 ---
 
-## Audio (progettato, non ancora implementato)
+## Audio (motore di sintesi implementato e testato; uscita SDL2/HDMI non ancora collegata)
 
-| Caratteristica | Valore previsto |
+| Caratteristica | Valore |
 |---|---|
-| Tipo | Sintesi procedurale (parametri: forma d'onda, frequenza, durata, inviluppo) — non campioni PCM |
-| Modello di riferimento | APU stile NES/Genesis (canali generati da oscillatori) |
-| Collocazione | Memory-mapped, regione dedicata (non ancora dimensionata) |
-| Trigger | Porta SOUND (scrivi un ID, l'APU lo riproduce) |
-| Estensione futura possibile | Campioni PCM veri, in aggiunta al procedurale (non al posto), per cartucce che vogliono più fedeltà |
+| Tipo | Sintesi procedurale — oscillatori (quadra/triangolo/sawtooth/rumore), non campioni PCM |
+| Canali | 8, **controllo esplicito** (il programma scrive nei registri del canale scelto — niente allocazione automatica) |
+| Inviluppo | ADSR vero (attack/decay/sustain/release), rampe lineari |
+| Mixing | Somma diretta dei canali attivi, clippata a piena scala (non divisa per 8 — un canale solo suona a piena scala) |
+| Collocazione | Memory-mapped, `APU_BASE` (dopo le porte) — 16 byte/canale × 8 = 128 byte totali |
+| Registri per canale | FREQ (16-bit Hz), WAVEFORM, DUTY, VOLUME, ATTACK, DECAY, SUSTAIN, RELEASE, CONTROL (bit0=GATE) — 6 byte riservati per estensioni |
+| Implementazione | `apu.lua`, verificato con `tests/test_apu.lua` (forme d'onda, inviluppo, indipendenza canali, rumore) |
+| Uscita audio reale | **Non ancora implementata** — prossimo passo: SDL2 (stessa libreria di video/input) verso ALSA/HDMI |
+| Confronto Pico-8 | Pico-8: 4 canali, niente ADSR vero (solo effetti tipo fade). Noi: 8 canali, ADSR vero |
+| Confronto SNES vero | SNES: campioni BRR compressi + CPU SPC700 dedicata + eco/riverbero hardware. Noi: solo oscillatori (niente campioni), niente CPU dedicata, eco/riverbero rimandato a estensione futura |
+| Estensione futura possibile | Eco/riverbero (buffer di delay + filtro, stile SNES); campioni PCM veri in aggiunta al procedurale (non al posto) |
 
 ---
 
@@ -136,10 +143,10 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 
 ## Cosa manca ancora
 
-- **Audio** (`apu.lua`) — non implementato
+- **Audio**: motore di sintesi (`apu.lua`) fatto e testato — resta da collegare l'uscita reale (SDL2 verso ALSA/HDMI), ancora non implementata
 - **OS** (`os.lua`) — selezione cartucce, sospensione/ripresa, dev-mode: progettato, non costruito
 - **Editor** (`editor.lua`) — tab Codice/Grafica/Suoni: progettato, non costruito
-- ~~Formato cartuccia reale~~ — **fatto** (`cart.lua`): resta la pipeline sorgente `dev/` → `.cart` (dipende dall'editor) e il banco audio swappabile (dipende da `apu.lua`)
+- ~~Formato cartuccia reale~~ — **fatto** (`cart.lua`): resta la pipeline sorgente `dev/` → `.cart` (dipende dall'editor) e il banco audio swappabile (dipende dall'uscita audio vera)
 - **ConsoleLang** — da decidere se portare o ripensare
 - **Salvataggio persistente** (save state) — non progettato
-- Verifica completa su Raspberry Pi 1 reale (video, input, PPU, `bench.lua`) — in corso
+- ~~Verifica completa su Raspberry Pi 1 reale~~ — **fatto** per CPU/PPU/video/input/cartuccia/LCD; PPU ottimizzata (~2x); ~38-40fps medi, minimo ~15fps

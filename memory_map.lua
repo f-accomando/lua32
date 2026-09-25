@@ -136,11 +136,9 @@ M.PORT_STAGE_SELECT = M.PORTS_BASE + 1   -- scrivere un numero di stage copia
                                            -- prima dall'host in cpu.stages)
 M.PORT_SCROLL_X = M.PORTS_BASE + 2
 M.PORT_SCROLL_Y = M.PORTS_BASE + 3
-M.PORT_SOUND = M.PORTS_BASE + 4          -- scrivere un ID suono lo accoda -
-                                           -- l'ID punta a una definizione nella
-                                           -- regione audio memory-mapped (APU,
-                                           -- vedi docs/design.md), non piu' a un
-                                           -- asset esterno
+-- (porta +4 libera - era PORT_SOUND, un'idea di "accoda un ID suono"
+-- superata dal controllo esplicito per canale dell'APU sotto: si
+-- scrive direttamente nei registri del canale, niente coda/porta unica)
 M.PORT_GFX_BANK_SELECT = M.PORTS_BASE + 5  -- stesso principio di PORT_STAGE_SELECT,
                                            -- ma per la grafica: scrivere un numero
                                            -- di banco copia ISTANTANEAMENTE
@@ -160,5 +158,42 @@ M.EXTRA_INPUT_PORTS = {
 }
 M.PORTS_SIZE = 256
 M.PORTS_END = M.PORTS_BASE + M.PORTS_SIZE
+
+-- ---------------------------------------------------------------
+-- APU - sintesi procedurale, 8 canali a controllo esplicito (il
+-- programma scrive direttamente nei registri del canale che vuole
+-- usare - niente "accoda su un canale libero", stessa filosofia delle
+-- console vere: nessun chip storico ha mai avuto allocazione
+-- automatica dei canali in hardware, e' sempre stato il codice del
+-- gioco a deciderlo). Vedi apu.lua e docs/design.md "Audio".
+--
+-- 16 byte per canale, generosi (6 riservati) per estensioni future
+-- (pan/stereo, LFO/pitch bend...) senza dover spostare tutto.
+-- ---------------------------------------------------------------
+M.APU_BASE = M.PORTS_END
+M.APU_CHANNEL_BYTES = 16
+M.APU_CHANNEL_COUNT = 8
+
+M.APU_REG_FREQ_LO = 0    -- frequenza in Hz, 16-bit little-endian (FREQ_LO+FREQ_HI)
+M.APU_REG_FREQ_HI = 1
+M.APU_REG_WAVEFORM = 2   -- 0=quadra 1=triangolo 2=sawtooth 3=rumore
+M.APU_REG_DUTY = 3       -- duty cycle della quadra, 0-255 (solo waveform 0)
+M.APU_REG_VOLUME = 4     -- volume base 0-255, moltiplicato per l'inviluppo ADSR
+M.APU_REG_ATTACK = 5     -- inviluppo ADSR, 0-255 (0 = istantaneo, 255 = piu' lento)
+M.APU_REG_DECAY = 6
+M.APU_REG_SUSTAIN = 7    -- livello di sustain, 0-255 (non un tempo)
+M.APU_REG_RELEASE = 8
+M.APU_REG_CONTROL = 9    -- bit0 = GATE (1 = nota accesa/tenuta, 0 = rilascio)
+-- +10..+15 riservati
+
+M.APU_WAVEFORM_SQUARE = 0
+M.APU_WAVEFORM_TRIANGLE = 1
+M.APU_WAVEFORM_SAWTOOTH = 2
+M.APU_WAVEFORM_NOISE = 3
+
+M.APU_CONTROL_GATE = 0x01
+
+M.APU_SIZE = M.APU_CHANNEL_BYTES * M.APU_CHANNEL_COUNT  -- 128
+M.APU_END = M.APU_BASE + M.APU_SIZE
 
 return M

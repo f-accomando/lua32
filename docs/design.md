@@ -150,16 +150,44 @@ istruzioni di un frame.
 
 ## Audio
 
-- **Sintesi procedurale**, non campioni PCM — parametri (tipo onda,
-  frequenza, durata, inviluppo) invece di audio pre-registrato, come
-  un vero APU NES/Genesis (canali pulse/triangle/noise generati da
-  oscillatori, non sample). Footprint minuscolo, coerente con
-  l'autenticità hardware del resto del progetto.
+- **Sintesi procedurale**, non campioni PCM — oscillatori (quadra con
+  duty cycle variabile, triangolo, sawtooth, rumore) passati per un
+  inviluppo ADSR vero, non sample pre-registrati. Via di mezzo
+  deliberata fra Pico-8 (procedurale ma solo effetti semplici, niente
+  ADSR vero) e lo SPC700/DSP dello SNES vero (ADSR vero, ma su
+  campioni BRR compressi, che restano esclusi) — vedi
+  `docs/scheda_tecnica.md` per il confronto completo.
+- **8 canali, controllo esplicito** — il programma scrive direttamente
+  nei registri del canale che vuole usare (frequenza, forma d'onda,
+  ADSR, GATE per accendere/spegnere la nota). Deliberatamente NESSUNA
+  allocazione automatica "trova un canale libero": nessun chip storico
+  (NES/SNES/Genesis) l'ha mai avuta in hardware, è sempre stato il
+  codice del gioco a deciderlo — coerente con la stessa filosofia già
+  usata per l'indicizzazione della CPU ("nessuna restrizione
+  artificiale"). Un'eventuale comodità "canale automatico" può essere
+  costruita sopra come funzione software, non hardware.
 - **Dentro la mappa di memoria** (non più un asset Python/Lua esterno
-  come il vecchio `sound_bank.py`) — una regione dedicata, stesso
-  pattern di VRAM/OAM/CGRAM. `PORT_SOUND` (scrivi un ID, parte il
-  suono) resta concettualmente uguale, ma l'ID ora punta a una
-  definizione dentro la mappa di memoria.
+  come il vecchio `sound_bank.py`) — una regione dedicata (`apu.lua`),
+  stesso pattern di VRAM/OAM/CGRAM: 16 byte per canale (6 riservati per
+  estensioni future come pan/stereo), 128 byte totali.
+- **Inviluppo lineare, non esponenziale** — scelta di semplicità per la
+  prima versione (un rate 0-255 si traduce in un incremento/decremento
+  costante per campione). L'hardware vero usa curve non lineari;
+  possibile raffinamento futuro se il lineare suona troppo "innaturale".
+- **Mixing**: somma diretta dei canali attivi (clippata a piena scala),
+  NON divisa per il numero di canali - un solo canale suona a piena
+  scala, non a un ottavo del volume. Il clipping interviene solo nel
+  caso raro di più canali forti in fase fra loro, stesso compromesso di
+  un mixer hardware semplice reale.
+- **Eco/riverbero stile SNES**: esplicitamente rimandato a
+  un'estensione futura, non nella prima versione — è la feature più
+  costosa concettualmente (buffer di delay + filtro) e non è necessaria
+  per essere già "oltre Pico-8" (che non ce l'ha).
+- **Uscita**: via SDL2 (stessa libreria già usata per video/input,
+  nessuna dipendenza nuova) verso l'audio ALSA su HDMI — ancora da
+  implementare/verificare (oggi esiste solo il motore di sintesi,
+  `apu.lua`, testato in isolamento; il collegamento a SDL2/HDMI è il
+  prossimo passo, stesso ordine già seguito per CPU→assembler→PPU→video).
 
 ## Cartucce
 
