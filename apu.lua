@@ -168,52 +168,63 @@ function Apu:generate(mem, n_samples)
             st.gated_prev = gate
 
             local stage = st.env_stage
-            local level = st.env_level
-            local sustain = sus_a[ch]
-            if stage == "attack" then
-                level = level + atk_a[ch]
-                if level >= 255 then level = 255; stage = "decay" end
-            elseif stage == "decay" then
-                level = level - dec_a[ch]
-                if level <= sustain then level = sustain; stage = "sustain" end
-            elseif stage == "sustain" then
-                level = sustain
-            elseif stage == "release" then
-                level = level - rel_a[ch]
-                if level <= 0 then level = 0; stage = "idle" end
-            end
-            st.env_stage = stage
-            st.env_level = level
 
-            local waveform = wave_a[ch]
-            local freq = freq_a[ch]
-            local value
-            if waveform == WAVE_NOISE then
-                st.phase = st.phase + freq / sample_rate
-                if st.phase >= 1.0 then
-                    st.phase = st.phase - floor(st.phase)
-                    local lfsr = st.lfsr
-                    local bit0 = bit.band(lfsr, 1)
-                    local bit1 = bit.band(bit.rshift(lfsr, 1), 1)
-                    local feedback = bit.bxor(bit0, bit1)
-                    st.lfsr = bit.bor(bit.rshift(lfsr, 1), bit.lshift(feedback, 14))
-                    st.noise_value = bit0 == 1 and 1.0 or -1.0
+            -- canale "idle" (mai acceso, o release finito) -> livello
+            -- sempre 0, quindi il contributo al mix e' sempre 0
+            -- qualunque cosa faccia l'oscillatore: saltare fase e forma
+            -- d'onda del tutto invece di calcolarle per poi moltiplicare
+            -- per zero. Nel caso comune (1-2 canali attivi su 8, es. il
+            -- solo SFX del bottone) questo salta il grosso del lavoro
+            -- per gli altri 6-7 canali silenziosi, per tutta la durata
+            -- in cui restano tali - non solo un micro-risparmio.
+            if stage ~= "idle" then
+                local level = st.env_level
+                local sustain = sus_a[ch]
+                if stage == "attack" then
+                    level = level + atk_a[ch]
+                    if level >= 255 then level = 255; stage = "decay" end
+                elseif stage == "decay" then
+                    level = level - dec_a[ch]
+                    if level <= sustain then level = sustain; stage = "sustain" end
+                elseif stage == "sustain" then
+                    level = sustain
+                elseif stage == "release" then
+                    level = level - rel_a[ch]
+                    if level <= 0 then level = 0; stage = "idle" end
                 end
-                value = st.noise_value
-            else
-                local phase = st.phase + freq / sample_rate
-                phase = phase - floor(phase)
-                st.phase = phase
-                if waveform == WAVE_SQUARE then
-                    value = phase < duty_a[ch] and 1.0 or -1.0
-                elseif waveform == WAVE_TRIANGLE then
-                    value = phase < 0.5 and (-1.0 + 4.0 * phase) or (3.0 - 4.0 * phase)
+                st.env_stage = stage
+                st.env_level = level
+
+                local waveform = wave_a[ch]
+                local freq = freq_a[ch]
+                local value
+                if waveform == WAVE_NOISE then
+                    st.phase = st.phase + freq / sample_rate
+                    if st.phase >= 1.0 then
+                        st.phase = st.phase - floor(st.phase)
+                        local lfsr = st.lfsr
+                        local bit0 = bit.band(lfsr, 1)
+                        local bit1 = bit.band(bit.rshift(lfsr, 1), 1)
+                        local feedback = bit.bxor(bit0, bit1)
+                        st.lfsr = bit.bor(bit.rshift(lfsr, 1), bit.lshift(feedback, 14))
+                        st.noise_value = bit0 == 1 and 1.0 or -1.0
+                    end
+                    value = st.noise_value
                 else
-                    value = 2.0 * phase - 1.0
+                    local phase = st.phase + freq / sample_rate
+                    phase = phase - floor(phase)
+                    st.phase = phase
+                    if waveform == WAVE_SQUARE then
+                        value = phase < duty_a[ch] and 1.0 or -1.0
+                    elseif waveform == WAVE_TRIANGLE then
+                        value = phase < 0.5 and (-1.0 + 4.0 * phase) or (3.0 - 4.0 * phase)
+                    else
+                        value = 2.0 * phase - 1.0
+                    end
                 end
-            end
 
-            mix = mix + value * (level / 255) * vol_a[ch]
+                mix = mix + value * (level / 255) * vol_a[ch]
+            end
         end
 
         -- somma diretta, NIENTE divisione fissa per n_channels: un
