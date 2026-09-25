@@ -57,7 +57,10 @@ local COLOR_NEUTRAL = { 90, 170, 220 }
 local COLOR_EMPTY = { 40, 40, 50 }   -- segmento non riempito
 local COLOR_PEAK = { 130, 130, 140 } -- segmento MAI riempito ora, ma raggiunto in passato (peak-hold)
 local COLOR_TEXT = { 235, 235, 235 } -- etichetta/valore, sempre bianco (il colore "parla" nella barra)
-local COLOR_DIM = { 55, 55, 62 }     -- valore testuale "mai successo" (es. UNDV), appena visibile
+local COLOR_DIM = { 30, 30, 36 }     -- valore testuale "mai successo" (es. UNDV) - quasi
+                                      -- confuso con lo sfondo della fascia ({10,10,14}),
+                                      -- deliberatamente difficile da leggere: non deve
+                                      -- attirare l'occhio quando non c'e' nessun problema
 
 -- -----------------------------------------------------------
 -- pacchettizzazione RGB565 (vedi nota in testa al file sull'ordine byte)
@@ -218,21 +221,11 @@ function LcdStatus:update(stats)
         y = y + LINE_HEIGHT
     end
 
-    -- GPU (present/blit su HDMI): scala 0-40ms, soglia 15ms. In coda:
-    -- "UNDV" (sottovoltaggio/throttling) - rosso se attivo ORA, arancio
-    -- se e' successo in passato ma ora e' rientrato, grigio spento se
-    -- non e' mai successo. Niente vero sensore di consumo sul Pi senza
-    -- hardware aggiuntivo, vedi sysinfo.lua.
+    -- GPU (present/blit su HDMI): scala 0-40ms, soglia 15ms.
     if stats.present_ms then
         local v = stats.present_ms
         local color = v < 15 and COLOR_GREEN or COLOR_RED
         draw_stat_row(self.frame, w, h, y, string.format("GPU %.2fMS", v), v / 40, color, self.peak_fraction, "gpu")
-        if stats.throttled then
-            local now_critical = stats.throttled.under_voltage_now or stats.throttled.throttled_now
-            local ever_critical = stats.throttled.under_voltage_ever or stats.throttled.throttled_ever
-            local tcolor = now_critical and COLOR_RED or (ever_critical and COLOR_ORANGE or COLOR_DIM)
-            draw_text(self.frame, w, h, EXTRA_X, y, "UNDV", tcolor[1], tcolor[2], tcolor[3])
-        end
         y = y + LINE_HEIGHT
     end
 
@@ -247,11 +240,23 @@ function LcdStatus:update(stats)
         y = y + LINE_HEIGHT
     end
 
-    -- FPS: scala 0-60 (barra piena = 60fps), rosso<30, arancio<60, verde>=60
+    -- FPS: scala 0-60 (barra piena = 60fps), rosso<30, arancio<60, verde>=60.
+    -- In coda: "UNDV" (sottovoltaggio/throttling) - rosso se attivo ORA,
+    -- arancio se e' successo in passato ma ora e' rientrato, grigio
+    -- MOLTO spento (quasi invisibile sullo sfondo scuro) se non e' mai
+    -- successo - non deve saltare all'occhio quando va tutto bene, solo
+    -- quando c'e' davvero un problema. Niente vero sensore di consumo
+    -- sul Pi senza hardware aggiuntivo, vedi sysinfo.lua.
     if stats.fps then
         local v = stats.fps
         local color = v < 30 and COLOR_RED or (v < 60 and COLOR_ORANGE or COLOR_GREEN)
         draw_stat_row(self.frame, w, h, y, string.format("FPS %d", v), v / 60, color, self.peak_fraction, "fps")
+        if stats.throttled then
+            local now_critical = stats.throttled.under_voltage_now or stats.throttled.throttled_now
+            local ever_critical = stats.throttled.under_voltage_ever or stats.throttled.throttled_ever
+            local tcolor = now_critical and COLOR_RED or (ever_critical and COLOR_ORANGE or COLOR_DIM)
+            draw_text(self.frame, w, h, EXTRA_X, y, "UNDV", tcolor[1], tcolor[2], tcolor[3])
+        end
     end
 
     -- scrittura: la parte "immagine" (sopra bar_y) non cambia mai dopo
