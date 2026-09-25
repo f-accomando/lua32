@@ -204,16 +204,30 @@ M.CART_LOAD_ADDR = CART_LOAD_ADDR
 -- l'HDMI e' l'unico output del gioco vero, l'LCD e' libero per
 -- diagnostica. Attivato solo con S32_LCD_STATUS=1 per non aggiungere
 -- costo (scrittura SPI) a chi non lo usa.
-local LCD_UPDATE_INTERVAL = 0.5  -- secondi fra un refresh del pannello e l'altro
+local LCD_UPDATE_INTERVAL = 2.0  -- secondi fra un refresh del pannello e l'altro -
+                                   -- ogni scrittura e' un giro SPI pieno (307KB):
+                                   -- piu' raro = meno consumo, rilevante sull'
+                                   -- alimentazione gia' tirata del Pi 1 sotto
+                                   -- il nuovo carico GPU (vedi vcgencmd get_throttled)
 local function lcd_status_enabled()
     return os.getenv("S32_LCD_STATUS") == "1"
 end
 
 -- riepilogo di sessione, stampato su stdout all'uscita (ESC/quit) cosi'
 -- si puo' copiare/incollare da SSH senza dover leggere l'LCD a voce -
--- picco/media/1% low/0.01% low sono le metriche standard per misurare
--- gli scatti (stutter), non solo il framerate medio: un frame pessimo
--- ogni tanto puo' sparire nella media ma si sente giocando.
+-- picco/media/1% low sono le metriche standard per misurare gli scatti
+-- (stutter), non solo il framerate medio: un frame pessimo ogni tanto
+-- puo' sparire nella media ma si sente giocando.
+--
+-- Il campione scarta i primi WARMUP_S secondi (transitori di avvio:
+-- creazione finestra/texture, warm-up del JIT) e qualunque frame piu'
+-- veloce di MAX_SANE_FPS - oltre quella soglia e' quasi certamente un
+-- artefatto di misura (es. il primissimo giro del loop, dove
+-- t-last_time e' quasi zero), non una prestazione reale raggiungibile
+-- da questa pipeline.
+local WARMUP_S = 2.0
+local MAX_SANE_FPS = 120
+
 local function avg_of(list, from, to)
     from = from or 1; to = to or #list
     local sum = 0
@@ -233,7 +247,6 @@ local function compute_fps_stats(frame_times_s)
         return avg_of(fps, 1, k), k
     end
     local low1, low1_n = low_pct(0.01)
-    local low001, low001_n = low_pct(0.0001)
 
     return {
         n = n,
@@ -241,7 +254,6 @@ local function compute_fps_stats(frame_times_s)
         peak = fps[n],
         worst = fps[1],
         low1 = low1, low1_n = low1_n,
-        low001 = low001, low001_n = low001_n,
     }
 end
 
@@ -251,18 +263,16 @@ local function print_session_summary(frame_times_s, cpu_s, ppu_s, present_s, ins
     print(string.format([[
 
 === s32 - riepilogo sessione (%d frame campionati) ===
-FPS medio:      %6.1f
-FPS di picco:   %6.1f
-FPS peggiore:   %6.1f
-1%% low:         %6.1f   (peggiori %d frame)
-0.01%% low:      %6.1f   (peggiori %d frame)
+FPS medio:          %6.1f
+FPS di picco:       %6.1f
+FPS 1%% piu' bassi:  %6.1f   (peggiori %d frame)
+FPS peggiore:       %6.1f
 
 CPU:  %.2f us/istruzione (%d istruzioni totali)
 PPU:  %.2f ms/frame medio
 GPU:  %.2f ms/frame medio (present/blit su HDMI)
 ]],
-        stats.n, stats.avg, stats.peak, stats.worst,
-        stats.low1, stats.low1_n, stats.low001, stats.low001_n,
+        stats.n, stats.avg, stats.peak, stats.low1, stats.low1_n, stats.worst,
         instr > 0 and (cpu_s / instr * 1e6) or 0, instr,
         ppu_s / frames * 1000,
         present_s / frames * 1000))
@@ -276,9 +286,12 @@ local function main()
 
     local v = video.new("s32 - demo", SCREEN_W, SCREEN_H, false)
 
-    local lcd_panel = nil
+    local lcd_panel, sysinfo = nil, nil
+    local cpu_load_state, throttled_info, throttled_timer = nil, nil, 0
+    local THROTTLED_CHECK_INTERVAL = 10.0  -- vcgencmd e' un sottoprocesso, va chiamato di rado
     if lcd_status_enabled() then
         local lcd_status = require("lcd_status")
+        sysinfo = require("sysinfo")
         lcd_panel = lcd_status.new(
             os.getenv("S32_LCD_FB") or "/dev/fb0",
             os.getenv("S32_LCD_BG") or "shinchan_565.bin",
@@ -291,6 +304,7 @@ local function main()
     -- il riepilogo finale su stdout, vedi print_session_summary
     local session_frame_times = {}
     local session_cpu_s, session_ppu_s, session_present_s, session_instr, session_frames = 0, 0, 0, 0, 0
+    local session_elapsed_s = 0
 
     local running = true
     local accumulator = 0
@@ -342,15 +356,24 @@ local function main()
 
         lcd_frames = lcd_frames + 1
         lcd_timer = lcd_timer + frame_time
-        -- il primissimo giro del loop ha un t-last_time quasi zero
-        -- (last_time e' stato appena impostato subito prima di entrare
-        -- nel while) - un fps finto e altissimo che sporca sia il
-        -- picco che la media, va scartato dal campione statistico
-        if session_frames > 0 then
+        session_elapsed_s = session_elapsed_s + raw_elapsed
+        -- scarta il periodo di avvio (transitori) e qualunque campione
+        -- oltre MAX_SANE_FPS (quasi certamente un artefatto di misura,
+        -- es. il primissimo giro del loop con t-last_time quasi zero)
+        if session_elapsed_s >= WARMUP_S and raw_elapsed >= 1 / MAX_SANE_FPS then
             session_frame_times[#session_frame_times + 1] = raw_elapsed
         end
         session_frames = session_frames + 1
         if lcd_panel and lcd_timer >= LCD_UPDATE_INTERVAL then
+            local cpu_load_pct
+            cpu_load_pct, cpu_load_state = sysinfo.read_cpu_usage_pct(cpu_load_state)
+
+            throttled_timer = throttled_timer + lcd_timer
+            if throttled_timer >= THROTTLED_CHECK_INTERVAL or throttled_info == nil then
+                throttled_info = sysinfo.read_throttled()
+                throttled_timer = 0
+            end
+
             lcd_panel:update({
                 cpu_ms = lcd_cpu_s / lcd_frames * 1000,
                 ppu_ms = lcd_ppu_s / lcd_frames * 1000,
@@ -359,6 +382,9 @@ local function main()
                 gfx_bank = cpu.current_gfx_bank,
                 stage = cpu.current_stage,
                 fps = math.floor(lcd_frames / lcd_timer + 0.5),
+                cpu_load_pct = cpu_load_pct,
+                temp_c = sysinfo.read_temp_c(),
+                throttled = throttled_info,
             })
             lcd_timer, lcd_instr, lcd_cpu_s, lcd_ppu_s, lcd_present_s, lcd_frames = 0, 0, 0, 0, 0, 0
         end

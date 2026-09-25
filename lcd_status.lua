@@ -145,13 +145,14 @@ function M.new(fb_path, bg_bin_path, width, height)
 end
 
 -- update(stats): stats = {
---   cpu_ms, ppu_ms, present_ms, vram_pct, gfx_bank, stage, fps
--- } - tutti opzionali, una riga viene disegnata solo se il relativo
--- campo e' presente
+--   cpu_ms, ppu_ms, present_ms, vram_pct, gfx_bank, stage, fps,
+--   cpu_load_pct, temp_c, throttled
+-- } - tutti opzionali, una riga/valore viene disegnato solo se il
+-- relativo campo e' presente
 function LcdStatus:update(stats)
     ffi.copy(self.frame, self.bg, self.frame_bytes)
 
-    local n_rows = 5
+    local n_rows = 6  -- 5 barre + 1 riga compatta di sistema (CPU%/temp/throttling)
     local bar_h = LINE_HEIGHT * n_rows + SCALE * 4
     local bar_y = self.height - bar_h
     fill_rect(self.frame, self.width, self.height, 0, bar_y, self.width, bar_h, 10, 10, 14)
@@ -203,6 +204,35 @@ function LcdStatus:update(stats)
         local v = stats.fps
         local color = v < 30 and COLOR_RED or (v < 60 and COLOR_ORANGE or COLOR_GREEN)
         draw_stat_row(self.frame, w, h, y, string.format("FPS %d", v), v / 60, color)
+        y = y + LINE_HEIGHT
+    end
+
+    -- riga compatta di sistema: solo valori nudi (nessuna etichetta),
+    -- colorati per criticita' - CPU%, temperatura, indicatore
+    -- throttling/sottovoltaggio (quadratino: verde ok, rosso critico -
+    -- niente vero sensore di consumo elettrico sul Pi senza hardware
+    -- aggiuntivo, vedi sysinfo.lua)
+    do
+        local x = SCALE * 2
+        if stats.cpu_load_pct then
+            local v = stats.cpu_load_pct
+            local color = v < 70 and COLOR_GREEN or (v < 90 and COLOR_ORANGE or COLOR_RED)
+            local text = string.format("%.0f%%", v)
+            draw_text(self.frame, w, h, x, y, text, color[1], color[2], color[3])
+            x = x + (#text + 2) * CHAR_ADVANCE
+        end
+        if stats.temp_c then
+            local v = stats.temp_c
+            local color = v < 70 and COLOR_GREEN or (v < 80 and COLOR_ORANGE or COLOR_RED)
+            local text = string.format("%.0fC", v)
+            draw_text(self.frame, w, h, x, y, text, color[1], color[2], color[3])
+            x = x + (#text + 2) * CHAR_ADVANCE
+        end
+        if stats.throttled then
+            local critical = stats.throttled.under_voltage_now or stats.throttled.throttled_now
+            local color = critical and COLOR_RED or COLOR_GREEN
+            fill_rect(self.frame, w, h, x, y, SEGMENT_H, SEGMENT_H, color[1], color[2], color[3])
+        end
     end
 
     local f = io.open(self.fb_path, "wb")
@@ -223,6 +253,7 @@ if arg and arg[0] and arg[0]:match("lcd_status%.lua$") then
     panel:update({
         cpu_ms = 2.1, ppu_ms = 35.92, present_ms = 21.24,
         vram_pct = 14, gfx_bank = 0, stage = 0, fps = 16,
+        cpu_load_pct = 62, temp_c = 71, throttled = { under_voltage_now = true, throttled_now = false },
     })
     print("Scritto un frame di prova su " .. fb_path)
 end
