@@ -48,6 +48,21 @@ luajit tests/test_demo_program.lua
 Questi non toccano SDL2/KMSDRM — se falliscono qui il problema è nella
 logica (CPU/PPU/formato cartuccia), non nel driver video.
 
+## 3bis. Se hai un desktop grafico attivo (Raspberry Pi OS "with desktop")
+
+Il motore fa il proprio modesetting via SDL2/KMSDRM e ha bisogno di
+essere l'unico a controllare il DRM ("DRM master"). Se il Pi boota in
+un desktop grafico (Wayland/Wayfire, labwc, X11...), quel desktop tiene
+già il DRM e SDL2 fallisce con `kmsdrm not available` anche se il
+driver è compilato correttamente (verificalo con
+`luajit tests/probe_sdl_drivers.lua`) — è un conflitto di sessione, non
+un problema di pacchetti.
+
+- [ ] `systemctl status display-manager` non è "active (running)", oppure:
+- [ ] boot impostato su console (`sudo raspi-config` → System Options →
+      Boot / Auto Login → Console Autologin), sensato per un Pi dedicato
+      a fare solo da console s32
+
 ## 4. Test SDL2/video reali (KMSDRM)
 
 ```sh
