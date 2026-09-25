@@ -384,19 +384,25 @@ local function main()
             -- diretta basterebbe da un programma cartuccia vero -
             -- qui scriviamo a mano perche' il demo non ha ancora
             -- istruzioni dedicate al suono.
+            --
+            -- Un "blup" morbido invece del bip acuto di prima: onda
+            -- triangolare (niente armoniche dure come il quadro),
+            -- frequenza piu' bassa, e soprattutto un sustain BASSO -
+            -- cosi' anche tenendo premuto il bottone il suono fa un
+            -- "pop" iniziale e sfuma quasi subito invece di ronzare
+            -- a volume pieno per tutta la pressione.
             local action = bit.band(input_byte, 0x10) ~= 0
             if action ~= prev_action then
                 local reg = mm.APU_BASE + SFX_CHANNEL * mm.APU_CHANNEL_BYTES
                 if action then
-                    cpu.mem[reg + mm.APU_REG_FREQ_LO] = 880 % 256
-                    cpu.mem[reg + mm.APU_REG_FREQ_HI] = math.floor(880 / 256)
-                    cpu.mem[reg + mm.APU_REG_WAVEFORM] = mm.APU_WAVEFORM_SQUARE
-                    cpu.mem[reg + mm.APU_REG_DUTY] = 128
-                    cpu.mem[reg + mm.APU_REG_VOLUME] = 200
-                    cpu.mem[reg + mm.APU_REG_ATTACK] = 2
-                    cpu.mem[reg + mm.APU_REG_DECAY] = 20
-                    cpu.mem[reg + mm.APU_REG_SUSTAIN] = 180
-                    cpu.mem[reg + mm.APU_REG_RELEASE] = 30
+                    cpu.mem[reg + mm.APU_REG_FREQ_LO] = 330 % 256
+                    cpu.mem[reg + mm.APU_REG_FREQ_HI] = math.floor(330 / 256)
+                    cpu.mem[reg + mm.APU_REG_WAVEFORM] = mm.APU_WAVEFORM_TRIANGLE
+                    cpu.mem[reg + mm.APU_REG_VOLUME] = 170
+                    cpu.mem[reg + mm.APU_REG_ATTACK] = 1
+                    cpu.mem[reg + mm.APU_REG_DECAY] = 35
+                    cpu.mem[reg + mm.APU_REG_SUSTAIN] = 40
+                    cpu.mem[reg + mm.APU_REG_RELEASE] = 40
                 end
                 cpu.mem[reg + mm.APU_REG_CONTROL] = action and mm.APU_CONTROL_GATE or 0
                 prev_action = action
