@@ -316,8 +316,8 @@ la generazione è deterministica).
 
 1. **Scroll ignorato dal ciclo principale**: `main.lua` chiama
    `ppu.render_frame(mem, 0, 0, ...)` invece di usare `cpu.scroll_x/scroll_y`, quindi le
-   porte `SCROLL_X/Y` oggi non hanno effetto visibile. La specifica (§7.2) segue il design
-   (lo scroll si applica); `main.lua` va allineato.
+   porte `SCROLL_X/Y` non avevano effetto visibile. La specifica (§7.2) segue il design
+   (lo scroll si applica); `main.lua` è stato allineato insieme a questa specifica.
 2. **Modo 16:9 (384×224)**: descritto nel design ma non selezionabile. Serve un campo
    nell'header (proposta: un byte di `reserved0`) prima di usarlo.
 3. **Header da 264 byte**: la scheda tecnica parla di 256 byte "packed"; il layout reale
