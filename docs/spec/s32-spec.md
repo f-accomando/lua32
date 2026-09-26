@@ -125,8 +125,8 @@ Notazione: `M[a]` = lettura a 16 bit con le regole delle porte (§2.1); `ZN(v)` 
 | `61`/`62` | JZ / JNZ addr | salta se Z / se non Z | — |
 | `63`/`64` | JLT / JGE addr | salta se N / se non N | — |
 | `65`/`66` | JCS / JCC addr | salta se C / se non C | — |
-| `67` | JSR addr | push(PC + 4); `PC = addr` | — |
-| `68` | RTS | `PC = pop()` | — |
+| `67` | JSR addr | push((PC + 4) & 0xFFFF); `PC = addr` | — |
+| `68` | RTS | `PC = pop()` (16 bit) | — |
 | `70`–`75` | PHA PLA PHX PLX PHY PLY | push / pop del registro | ZN sui pull |
 | `80` | IN | `A = byte(INPUT)` | nessuno |
 | `90`/`91` | CLAMPX / CLAMPY lo,hi | se `R < lo` allora `R = lo`; se `R > hi` allora `R = hi` (senza segno) | nessuno |
@@ -326,6 +326,11 @@ la generazione è deterministica).
    documentato così com'è; da confermare se è voluto.
 5. **Registri persistenti tra i tick**: documentato (§4.3). Da confermare se è voluto o se
    i registri vanno azzerati a ogni tick.
+6. **JSR salva solo 16 bit**: lo stack è a 16 bit, quindi l'indirizzo di ritorno perde il
+   byte alto e `RTS` torna sotto `0x010000`. Oggi il codice sta a `0x001000`, quindi non
+   succede nulla; una subroutine chiamata da codice sopra `0x00FFFF` tornerebbe
+   all'indirizzo sbagliato. Da decidere: documentarlo come limite (codice sotto 64 KiB) o
+   salvare 24 bit (due push).
 
 ## 11. Proposta: cartucce Lua (non ancora implementata)
 
