@@ -314,29 +314,48 @@ la generazione è deterministica).
 
 ## 10. Problemi aperti e differenze trovate
 
+Le decisioni qui sotto (prese il 2026-09-26) sono registrate anche in
+[`s32-bm33.md`](s32-bm33.md), il registro delle decisioni condivise fra
+lua32 e bm33 — consultarlo per il contesto/perché di ciascuna; qui resta
+solo l'esito.
+
 1. **Scroll ignorato dal ciclo principale**: `main.lua` chiama
    `ppu.render_frame(mem, 0, 0, ...)` invece di usare `cpu.scroll_x/scroll_y`, quindi le
    porte `SCROLL_X/Y` non avevano effetto visibile. La specifica (§7.2) segue il design
    (lo scroll si applica); `main.lua` è stato allineato insieme a questa specifica.
-2. **Modo 16:9 (384×224)**: descritto nel design ma non selezionabile. Serve un campo
-   nell'header (proposta: un byte di `reserved0`) prima di usarlo.
+   **Risolto**: corretto in `main.lua` nella stessa PR.
+2. **Modo 16:9 (384×224)**: descritto nel design ma non selezionabile. **Deciso**:
+   `reserved0[1]` = `screen_mode` (0 = 4:3, 1 = 16:9) — vedi §11 per l'allocazione
+   completa di `reserved0`. Non ancora implementato in lua32.
 3. **Header da 264 byte**: la scheda tecnica parla di 256 byte "packed"; il layout reale
    è quello di §6.1. D'ora in poi gli offset sono fissati qui, non dal compilatore.
-4. **Sprite con tile 0** disegnati, a differenza delle celle di sfondo: comportamento
-   documentato così com'è; da confermare se è voluto.
-5. **Registri persistenti tra i tick**: documentato (§4.3). Da confermare se è voluto o se
-   i registri vanno azzerati a ogni tick.
+   **Risolto**: `scheda_tecnica.md` aggiornata.
+4. **Sprite con tile 0** disegnati, a differenza delle celle di sfondo. **Deciso**:
+   intenzionale, resta così — lo sfondo usa l'indice 0 come sentinella "cella vuota"
+   (serve per il default a tilemap azzerata), gli sprite hanno già il bit `visible` per
+   lo stesso scopo e non necessitano dello stesso sacrificio.
+5. **Registri persistenti tra i tick**: documentato (§4.3). **Deciso**: intenzionale,
+   resta così — coerente con un modello a CPU vera (solo il PC viene reimpostato).
 6. **JSR salva solo 16 bit**: lo stack è a 16 bit, quindi l'indirizzo di ritorno perde il
    byte alto e `RTS` torna sotto `0x010000`. Oggi il codice sta a `0x001000`, quindi non
    succede nulla; una subroutine chiamata da codice sopra `0x00FFFF` tornerebbe
-   all'indirizzo sbagliato. Da decidere: documentarlo come limite (codice sotto 64 KiB) o
-   salvare 24 bit (due push).
+   all'indirizzo sbagliato. **Deciso**: restare a 16 bit, documentato qui come limite
+   (codice cartuccia sotto 64 KiB) invece di passare a un indirizzo di ritorno a 24 bit —
+   nessun caso d'uso reale oggi lo richiede.
 
 ## 11. Proposta: cartucce Lua (non ancora implementata)
 
 Obiettivo: cartucce scritte in Lua che girano sia su lua32 (LuaJIT, Lua 5.1) sia su bm33
 (Lua 5.4), usando la **stessa macchina** (stessa VRAM, OAM, CGRAM, APU, input, stessi
 limiti) al posto della CPU s32.
+
+**Allocazione di `reserved0[3]`** (§6.1) — decisa il 2026-09-26, vedi `s32-bm33.md`:
+
+| Byte | Campo | Stato |
+|---|---|---|
+| `reserved0[0]` | `code_type` (0 = codice macchina s32, 1 = sorgente Lua) | proposto qui sotto, non implementato |
+| `reserved0[1]` | `screen_mode` (0 = 4:3 320×224, 1 = 16:9 384×224, §10.2) | deciso, non implementato |
+| `reserved0[2]` | libero | — |
 
 - **Tipo di codice**: `reserved0[0]` diventa `code_type`: `0` = codice macchina s32
   (tutte le cartucce esistenti), `1` = sorgente Lua in UTF-8 nella sezione codice.

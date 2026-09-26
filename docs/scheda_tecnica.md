@@ -111,11 +111,12 @@ Prestazioni misurate in sandbox x86 (**non** rappresentative del Pi — vedi `te
 
 | Caratteristica | Valore |
 |---|---|
-| Contenitore | File binario `.cart`, header a 256 byte (packed) + sezioni |
+| Contenitore | File binario `.cart`, header a **264 byte** (non 256: lo struct FFI non è packed e contiene padding — offset espliciti in `docs/spec/s32-spec.md` §6.1) + sezioni |
 | Header | Magic, versione, **uid** (16B), titolo, autore, data, offset/dimensione sezioni, **CRC32** (integrità), **SHA-256** (32B, riservato per autenticità/NFT future, non ancora calcolato) |
 | Sezioni | Codice · banchi di stage (32KB, tilemap) · banchi grafici (~520KB, directory+archivio) · palette iniziale (CGRAM, opzionale) |
 | Swap grafico | Porta `PORT_GFX_BANK_SELECT` — stesso meccanismo di `PORT_STAGE_SELECT`, esteso alla grafica |
 | Implementazione | `cart.lua` — `pack()`/`load()`/`install()`, verificato con `tests/test_cart.lua` (round-trip, esecuzione, rilevamento corruzione) |
+| Specifica formale | `docs/spec/s32-spec.md` — contratto comune con `bm33` (implementazione bare metal), vedi anche `docs/spec/s32-bm33.md` per il registro delle decisioni condivise |
 | Non ancora fatto | Banco audio swappabile (dipende da `apu.lua`); pipeline sorgente `dev/<cartuccia>/` (PNG/JSON) → `.cart` (dipende dall'editor) |
 
 ---
