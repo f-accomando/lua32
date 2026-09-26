@@ -609,7 +609,7 @@ local function main()
             game.session_apu_s = game.session_apu_s + dt_apu
 
             local t_ppu = now()
-            local buf = ppu.render_frame(game.cpu.mem, 0, 0, SCREEN_W, SCREEN_H)
+            local buf = ppu.render_frame(game.cpu.mem, game.cpu.scroll_x, game.cpu.scroll_y, SCREEN_W, SCREEN_H)
             local dt_ppu = now() - t_ppu
             game.lcd_ppu_s = game.lcd_ppu_s + dt_ppu
             game.session_ppu_s = game.session_ppu_s + dt_ppu
